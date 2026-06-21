@@ -1,0 +1,79 @@
+# ========== 敏感信息（绝对不能提交） ==========
+.env
+.env.local
+.env.*
+mcp_servers/.env
+
+# ========== Python ==========
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ========== 虚拟环境 ==========
+venv/
+env/
+ENV/
+.venv
+.uv/
+
+# ========== IDE ==========
+.vscode/
+.idea/
+.vs/
+*.swp
+*.swo
+*~
+
+# ========== 日志 ==========
+logs/
+mcp_servers/logs/
+*.log
+*.pid
+
+# ========== 数据库 & 存储 ==========
+*.db
+*.sqlite
+volumes/
+uploads/
+*.tmp
+
+# ========== 编译产物 ==========
+a.out
+*.o
+*.exe
+
+# ========== OS 文件 ==========
+.DS_Store
+Thumbs.db
+
+# ========== 测试 ==========
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ========== 类型检查 ==========
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+
+# ========== 其他 ==========
+CodeBuddy/
+.pre-commit-config.yaml
