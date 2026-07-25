@@ -5,11 +5,13 @@
 支持对话上下文自动压缩（当 token 使用量达到 70% 阈值时自动总结历史对话）。
 """
 
-from typing import Annotated, Any, AsyncGenerator, Dict, Sequence
+from typing import Annotated, Any, AsyncGenerator, Dict, List, Sequence
+from datetime import datetime
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import (
+    AIMessage,
     BaseMessage,
     HumanMessage,
     RemoveMessage,
@@ -25,6 +27,8 @@ from langchain_qwq import ChatQwen
 from app.config import config
 from app.tools import get_current_time, retrieve_knowledge
 from app.agent.mcp_client import get_mcp_client_with_retry
+from app.core.storage_factory import get_storage_engine
+from app.core.storage_engine import AbstractStorageEngine
 
 # 阿里千问大模型和langchain集成参考： https://docs.langchain.com/oss/python/integrations/chat/qwen
 # 注意：需要配置环境变量 DASHSCOPE_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1 否则默认访问的是新加坡站点
@@ -404,14 +408,18 @@ class RagAgentService:
         # MCP 客户端（延迟初始化，使用全局管理）
         self.mcp_tools: list = []
 
-        # 创建内存检查点（用于会话管理）
+        # 创建内存检查点（用于单次请求内的状态管理）
         self.checkpointer = MemorySaver()
+
+        # 持久化存储引擎（与 AIOps 共享，通过 key 前缀隔离）
+        self.storage: AbstractStorageEngine = get_storage_engine()
 
         # Agent 初始化（会在异步方法中完成）
         self.agent = None
         self._agent_initialized = False
 
         logger.info(f"RAG Agent 服务初始化完成 (ChatQwen), model={self.model_name}, streaming={streaming}")
+        logger.info(f"存储后端: {type(self.storage).__name__}")
 
     async def _initialize_agent(self):
         """异步初始化 Agent（包括 MCP 工具和动态系统提示词）"""
@@ -619,6 +627,91 @@ class RagAgentService:
             """).strip()
         return ""
 
+    def _chat_key(self, session_id: str) -> str:
+        """生成聊天专用的存储 key，与 AIOps 隔离
+
+        Args:
+            session_id: 原始会话 ID
+
+        Returns:
+            str: 带前缀的存储 key
+        """
+        return f"chat:{session_id}"
+
+    def _serialize_messages(self, messages: List[BaseMessage]) -> List[Dict[str, Any]]:
+        """将 BaseMessage 列表序列化为 JSON 安全的字典列表
+
+        过滤掉 SystemMessage（每次请求动态构建），只保留对话消息。
+
+        Args:
+            messages: LangChain 消息列表
+
+        Returns:
+            List[Dict]: 可 JSON 序列化的字典列表
+        """
+        serialized = []
+        for msg in messages:
+            if isinstance(msg, SystemMessage):
+                continue  # 系统提示每次动态构建，不持久化
+
+            content = msg.content if hasattr(msg, 'content') else str(msg)
+
+            # 处理多模态内容（列表类型只提取文本）
+            if isinstance(content, list):
+                text_parts = []
+                for block in content:
+                    if isinstance(block, dict) and block.get('type') == 'text':
+                        text_parts.append(block.get('text', ''))
+                content = ' '.join(text_parts)
+
+            msg_dict: Dict[str, Any] = {
+                "content": content,
+                "timestamp": datetime.now().isoformat(),
+            }
+
+            if isinstance(msg, HumanMessage):
+                msg_dict["type"] = "human"
+            elif isinstance(msg, AIMessage):
+                msg_dict["type"] = "ai"
+            elif isinstance(msg, ToolMessage):
+                msg_dict["type"] = "tool"
+                msg_dict["name"] = getattr(msg, 'name', '')
+                msg_dict["tool_call_id"] = getattr(msg, 'tool_call_id', '')
+            else:
+                msg_dict["type"] = "unknown"
+
+            serialized.append(msg_dict)
+
+        return serialized
+
+    def _deserialize_messages(self, messages_data: List[Dict[str, Any]]) -> List[BaseMessage]:
+        """从字典列表反序列化为 BaseMessage 列表
+
+        Args:
+            messages_data: 序列化的消息字典列表
+
+        Returns:
+            List[BaseMessage]: LangChain 消息列表
+        """
+        messages = []
+        for msg in messages_data:
+            msg_type = msg.get("type", "unknown")
+            content = msg.get("content", "")
+
+            if msg_type == "human":
+                messages.append(HumanMessage(content=content))
+            elif msg_type == "ai":
+                messages.append(AIMessage(content=content))
+            elif msg_type == "tool":
+                messages.append(ToolMessage(
+                    content=content,
+                    name=msg.get("name", ""),
+                    tool_call_id=msg.get("tool_call_id", ""),
+                ))
+            # 跳过 unknown 类型
+
+        return messages
+
     async def query(
         self,
         question: str,
@@ -626,6 +719,8 @@ class RagAgentService:
     ) -> str:
         """
         非流式处理用户问题（一次性返回完整答案）
+
+        支持从 SQLite 持久化存储恢复历史消息，重启后可继续对话。
 
         Args:
             question: 用户问题
@@ -639,8 +734,17 @@ class RagAgentService:
 
             logger.info(f"[会话 {session_id}] RAG Agent 收到查询（非流式）: {question}")
 
-            # 构建消息列表（系统提示 + 用户问题）
-            messages = [
+            # 从持久化存储恢复历史消息
+            saved_state = await self.storage.get_state(self._chat_key(session_id))
+            history_messages = self._deserialize_messages(
+                saved_state["messages"]
+            ) if saved_state and "messages" in saved_state else []
+
+            if history_messages:
+                logger.info(f"[会话 {session_id}] 从持久化存储恢复了 {len(history_messages)} 条历史消息")
+
+            # 构建消息列表（历史 + 系统提示 + 新问题）
+            messages = history_messages + [
                 SystemMessage(content=self.system_prompt),
                 HumanMessage(content=question)
             ]
@@ -648,7 +752,7 @@ class RagAgentService:
             # 构建 Agent 输入
             agent_input = {"messages": messages}
 
-            # 配置 thread_id（用于会话持久化）
+            # 配置 thread_id（用于单次请求状态管理）
             config_dict = {
                 "configurable": {
                     "thread_id": session_id
@@ -660,7 +764,7 @@ class RagAgentService:
                 config=config_dict,
             )
 
-            # 提取最终答案
+            # 提取最终答案并持久化
             messages_result = result.get("messages", [])
             if messages_result:
                 last_message = messages_result[-1]
@@ -670,6 +774,16 @@ class RagAgentService:
                 if hasattr(last_message, "tool_calls") and last_message.tool_calls:
                     tool_names = [tc.get("name", "unknown") for tc in last_message.tool_calls]
                     logger.info(f"[会话 {session_id}] Agent 调用了工具: {tool_names}")
+
+                # 持久化：提取对话消息（过滤系统提示）
+                chat_messages = [
+                    m for m in messages_result if not isinstance(m, SystemMessage)
+                ]
+                await self.storage.save_state(
+                    self._chat_key(session_id),
+                    {"messages": self._serialize_messages(chat_messages)}
+                )
+                logger.info(f"[会话 {session_id}] 已持久化 {len(chat_messages)} 条消息")
 
                 logger.info(f"[会话 {session_id}] RAG Agent 查询完成（非流式）")
                 return answer
@@ -689,6 +803,8 @@ class RagAgentService:
         """
         流式处理用户问题（逐步返回答案片段）
 
+        支持从 SQLite 持久化存储恢复历史消息，重启后可继续对话。
+
         Args:
             question: 用户问题
             session_id: 会话ID（作为 thread_id）
@@ -703,8 +819,17 @@ class RagAgentService:
 
             logger.info(f"[会话 {session_id}] RAG Agent 收到查询（流式）: {question}")
 
-            # 构建消息列表（系统提示 + 用户问题）
-            messages = [
+            # 从持久化存储恢复历史消息
+            saved_state = await self.storage.get_state(self._chat_key(session_id))
+            history_messages = self._deserialize_messages(
+                saved_state["messages"]
+            ) if saved_state and "messages" in saved_state else []
+
+            if history_messages:
+                logger.info(f"[会话 {session_id}] 从持久化存储恢复了 {len(history_messages)} 条历史消息")
+
+            # 构建消息列表（历史 + 系统提示 + 新问题）
+            messages = history_messages + [
                 SystemMessage(content=self.system_prompt),
                 HumanMessage(content=question)
             ]
@@ -712,7 +837,7 @@ class RagAgentService:
             # 构建 Agent 输入
             agent_input = {"messages": messages}
 
-            # 配置 thread_id（用于会话持久化）
+            # 配置 thread_id（用于单次请求状态管理）
             config_dict = {
                 "configurable": {
                     "thread_id": session_id
@@ -796,6 +921,30 @@ class RagAgentService:
                         "node": node_name
                     }
 
+            # 流结束后，从 MemorySaver 获取最终状态并持久化
+            try:
+                final_state = self.checkpointer.get(config_dict)
+                if final_state:
+                    # 提取 checkpoint 中的最终消息
+                    if hasattr(final_state, 'checkpoint'):
+                        checkpoint_data = final_state.checkpoint
+                    else:
+                        checkpoint_data = final_state[0] if final_state else {}
+
+                    checkpoint_messages = checkpoint_data.get("channel_values", {}).get("messages", [])
+
+                    if checkpoint_messages:
+                        chat_messages = [
+                            m for m in checkpoint_messages if not isinstance(m, SystemMessage)
+                        ]
+                        await self.storage.save_state(
+                            self._chat_key(session_id),
+                            {"messages": self._serialize_messages(chat_messages)}
+                        )
+                        logger.info(f"[会话 {session_id}] 流式对话已持久化 {len(chat_messages)} 条消息")
+            except Exception as persist_err:
+                logger.warning(f"[会话 {session_id}] 流式对话持久化失败（不影响对话结果）: {persist_err}")
+
             # 如果有工具错误，在完成前发送警告
             if has_error and error_messages:
                 logger.warning(f"[会话 {session_id}] 部分工具调用失败: {error_messages}")
@@ -817,84 +966,46 @@ class RagAgentService:
                 "data": str(e)
             }
 
-    def get_session_history(self, session_id: str) -> list:
+    async def get_session_history(self, session_id: str) -> list:
         """
-        获取会话历史（从 MemorySaver checkpointer 中读取）
+        获取会话历史（从 SQLite 持久化存储中读取）
 
         Args:
-            session_id: 会话ID（即 thread_id）
+            session_id: 会话ID
 
         Returns:
-            list: 消息历史列表 [{"role": "user|assistant", "content": "...", "timestamp": "..."}]
+            list: 消息历史列表 [{"type": "human|ai|tool", "content": "...", "timestamp": "..."}]
         """
         try:
-            # 使用 checkpointer 的 get 方法获取最新的检查点
-            config = {"configurable": {"thread_id": session_id}}
-
-            # 获取该 thread 的最新检查点
-            checkpoint_tuple = self.checkpointer.get(config)
-
-            if not checkpoint_tuple:
+            saved_state = await self.storage.get_state(self._chat_key(session_id))
+            if not saved_state or "messages" not in saved_state:
                 logger.info(f"获取会话历史: {session_id}, 消息数量: 0")
                 return []
 
-            # checkpoint_tuple 可能是命名元组或普通元组，安全地提取 checkpoint
-            # 通常第一个元素是 checkpoint 数据
-            if hasattr(checkpoint_tuple, 'checkpoint'):
-                checkpoint_data = checkpoint_tuple.checkpoint  # type: ignore
-            else:
-                # 如果是普通元组，第一个元素是 checkpoint
-                checkpoint_data = checkpoint_tuple[0] if checkpoint_tuple else {}
-
-            # 从检查点中提取消息
-            messages = checkpoint_data.get("channel_values", {}).get("messages", [])
-
-            # 转换为前端需要的格式
-            history = []
-            for msg in messages:
-                # 跳过系统消息
-                if isinstance(msg, SystemMessage):
-                    continue
-
-                role = "user" if isinstance(msg, HumanMessage) else "assistant"
-                content = msg.content if hasattr(msg, 'content') else str(msg)
-
-                # 提取时间戳（如果有的话）
-                timestamp = getattr(msg, 'timestamp', None)
-                if timestamp:
-                    history.append({
-                        "role": role,
-                        "content": content,
-                        "timestamp": timestamp
-                    })
-                else:
-                    from datetime import datetime
-                    history.append({
-                        "role": role,
-                        "content": content,
-                        "timestamp": datetime.now().isoformat()
-                    })
-
-            logger.info(f"获取会话历史: {session_id}, 消息数量: {len(history)}")
-            return history
+            messages = saved_state["messages"]
+            logger.info(f"获取会话历史: {session_id}, 消息数量: {len(messages)}")
+            return messages
 
         except Exception as e:
             logger.error(f"获取会话历史失败: {session_id}, 错误: {e}")
             return []
 
-    def clear_session(self, session_id: str) -> bool:
+    async def clear_session(self, session_id: str) -> bool:
         """
-        清空会话历史（从 MemorySaver checkpointer 中删除）
+        清空会话历史（同时从 MemorySaver 和 SQLite 中清除）
 
         Args:
-            session_id: 会话ID（即 thread_id）
+            session_id: 会话ID
 
         Returns:
             bool: 是否成功
         """
         try:
-            # 使用 checkpointer 的 delete_thread 方法删除该 thread 的所有检查点
+            # 清除内存中的检查点
             self.checkpointer.delete_thread(session_id)
+
+            # 清除持久化存储
+            await self.storage.delete_state(self._chat_key(session_id))
 
             logger.info(f"已清除会话历史: {session_id}")
             return True

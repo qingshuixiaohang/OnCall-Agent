@@ -36,7 +36,7 @@ async def list_sessions():
 
 @router.get("/sessions/{session_id}")
 async def get_session_state(session_id: str):
-    """获取指定会话的状态"""
+    """获取指定会话的状态（兼容 AIOps 和 Chat 两种格式）"""
     try:
         storage = get_storage_engine()
         state = await storage.get_state(session_id)
@@ -44,13 +44,24 @@ async def get_session_state(session_id: str):
         if state is None:
             raise HTTPException(status_code=404, detail="会话不存在")
 
-        # 过滤敏感信息
-        filtered_state = {
-            "input": state.get("input", ""),
-            "plan": state.get("plan", []),
-            "past_steps_count": len(state.get("past_steps", [])),
-            "response": state.get("response", "")
-        }
+        # 判断是 Chat 会话还是 AIOps 会话
+        if "messages" in state:
+            # Chat 会话格式
+            messages = state.get("messages", [])
+            filtered_state = {
+                "type": "chat",
+                "message_count": len(messages),
+                "history": messages
+            }
+        else:
+            # AIOps 会话格式
+            filtered_state = {
+                "type": "aiops",
+                "input": state.get("input", ""),
+                "plan": state.get("plan", []),
+                "past_steps_count": len(state.get("past_steps", [])),
+                "response": state.get("response", "")
+            }
 
         return JSONResponse(
             status_code=200,

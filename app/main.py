@@ -12,7 +12,7 @@ import os
 
 from app.config import config
 from loguru import logger
-from app.api import chat, health, file, aiops, session
+from app.api import chat, health, file, aiops, session, multi_agent
 from app.core.milvus_client import milvus_manager
 
 
@@ -20,7 +20,15 @@ from app.core.milvus_client import milvus_manager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时执行
-    logger.info("=" * 60)
+    # LangSmith 追踪状态
+    _tracing = os.environ.get("LANGCHAIN_TRACING_V2", "").lower()
+    if _tracing == "true":
+        logger.info("🔍 LangSmith 追踪: 已开启")
+        logger.info(f"📊 LangSmith 项目: {os.environ.get('LANGCHAIN_PROJECT', 'default')}")
+    else:
+        logger.info("🔍 LangSmith 追踪: 未开启")
+
+        logger.info("=" * 60)
     logger.info(f"🚀 {config.app_name} v{config.app_version} 启动中...")
     logger.info(f"📝 环境: {'开发' if config.debug else '生产'}")
     logger.info(f"🌐 监听地址: http://{config.host}:{config.port}")
@@ -31,7 +39,15 @@ async def lifespan(app: FastAPI):
     milvus_manager.connect()
     logger.info("✅ Milvus 连接成功")
     
-    logger.info("=" * 60)
+    # LangSmith 追踪状态
+    _tracing = os.environ.get("LANGCHAIN_TRACING_V2", "").lower()
+    if _tracing == "true":
+        logger.info("🔍 LangSmith 追踪: 已开启")
+        logger.info(f"📊 LangSmith 项目: {os.environ.get('LANGCHAIN_PROJECT', 'default')}")
+    else:
+        logger.info("🔍 LangSmith 追踪: 未开启")
+
+        logger.info("=" * 60)
     
     yield
     
@@ -63,6 +79,7 @@ app.include_router(health.router, tags=["健康检查"])
 app.include_router(chat.router, prefix="/api", tags=["对话"])
 app.include_router(file.router, prefix="/api", tags=["文件管理"])
 app.include_router(aiops.router, prefix="/api", tags=["AIOps智能运维"])
+app.include_router(multi_agent.router, prefix="/api", tags=["Multi-Agent智能运维"])
 app.include_router(session.router, prefix="/api", tags=["会话管理"])
 
 # 挂载静态文件

@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     storage_sqlite_path: str = "./volumes/langgraph.db"
     storage_max_history: int = 100
     storage_session_ttl: int = 86400  # 24小时
+    # LangSmith 配置（可观测性）
+    langsmith_tracing: bool = False
+    langsmith_api_key: str = ""
+    langsmith_project: str = "OnCall-Agent"
+    langsmith_endpoint: str = "https://api.smith.langchain.com"
 
     @property
     def mcp_servers(self) -> Dict[str, Dict[str, Any]]:

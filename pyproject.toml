@@ -32,6 +32,7 @@ dependencies = [
     "langchain-qwq>=0.3.4",
     "tencentcloud-sdk-python>=3.1.108",
     "tiktoken>=0.7.0",
+    "langsmith>=0.1.0",
     "pypdf>=5.0.0",
     "docx2txt>=0.9",
     "sqlalchemy>=2.0.0",
