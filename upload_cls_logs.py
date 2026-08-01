@@ -1,22 +1,98 @@
+"""
+上传测试日志到腾讯云 CLS（使用主 SDK，不依赖 tencentcloud-cls-sdk-python）
+
+使用 tencentcloud-sdk-python 的 UploadLog API，手动编写 protobuf 编码，
+避免 protobuf 版本冲突（项目用 v6，CLS Log SDK 需要 v3）。
+"""
 import os
-import time
+import sys
+import json
 from datetime import datetime, timedelta
-from tencentcloud.log.logclient import LogClient
-from tencentcloud.log.logexception import LogException
-from tencentcloud.log.cls_pb2 import LogGroupList
 
-# 配置腾讯云密钥
-secret_id = os.environ.get("TENCENTCLOUD_SECRET_ID", "")
-secret_key = os.environ.get("TENCENTCLOUD_SECRET_KEY", "")
-region = "ap-guangzhou"
-endpoint = f"https://{region}.cls.tencentcs.com"
+sys.stdout.reconfigure(encoding="utf-8")
 
-# 初始化客户端
-client = LogClient(endpoint, secret_id, secret_key)
-topic_id = "38754d79-e410-4f16-9ed3-5e047cc8099b"
+from dotenv import load_dotenv
+from tencentcloud.common import credential
+from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
+from tencentcloud.cls.v20201016 import cls_client, models as cls_models
 
-# 所有日志数据定义: (level, service, message, minutes_ago)
-# minutes_ago: 距离现在多少分钟之前 (负数表示过去)
+load_dotenv()
+
+SECRET_ID = os.environ.get("TENCENTCLOUD_SECRET_ID", "")
+SECRET_KEY = os.environ.get("TENCENTCLOUD_SECRET_KEY", "")
+REGION = "ap-guangzhou"
+TOPIC_ID = "38754d79-e410-4f16-9ed3-5e047cc8099b"
+
+# ============================================================================
+# Protobuf 手动编码（CLS 日志上传格式）
+# 文档: https://cloud.tencent.com/document/product/614/16873
+# ============================================================================
+
+def _varint(value: int) -> bytes:
+    """编码 varint"""
+    result = []
+    while value > 0x7F:
+        result.append((value & 0x7F) | 0x80)
+        value >>= 7
+    result.append(value & 0x7F)
+    return bytes(result)
+
+
+def _tag(field_number: int, wire_type: int) -> bytes:
+    """编码 field tag"""
+    return _varint((field_number << 3) | wire_type)
+
+
+def _field_int64(field_number: int, value: int) -> bytes:
+    """编码 int64 字段（wire type 0）"""
+    return _tag(field_number, 0) + _varint(value)
+
+
+def _field_bytes(field_number: int, data: bytes) -> bytes:
+    """编码 length-delimited 字段（wire type 2）"""
+    return _tag(field_number, 2) + _varint(len(data)) + data
+
+
+def _field_string(field_number: int, value: str) -> bytes:
+    """编码 string 字段"""
+    return _field_bytes(field_number, value.encode("utf-8"))
+
+
+def encode_content(key: str, value: str) -> bytes:
+    """编码 Content 消息: { key=1, value=2 }"""
+    return _field_string(1, key) + _field_string(2, value)
+
+
+def encode_log(timestamp_ms: int, contents: dict) -> bytes:
+    """编码 Log 消息: { time=1(int64), contents=2(repeated Content) }"""
+    data = _field_int64(1, timestamp_ms)
+    for key, value in contents.items():
+        data += _field_bytes(2, encode_content(key, str(value)))
+    return data
+
+
+def encode_log_group(logs: list, source: str = "10.0.0.1") -> bytes:
+    """编码 LogGroup 消息: { logs=1(repeated Log), source=4(string) }"""
+    data = b""
+    for log_data in logs:
+        data += _field_bytes(1, log_data)
+    if source:
+        data += _field_string(4, source)
+    return data
+
+
+def encode_log_group_list(log_groups: list) -> bytes:
+    """编码 LogGroupList 消息: { logGroupList=1(repeated LogGroup) }"""
+    data = b""
+    for group_data in log_groups:
+        data += _field_bytes(1, group_data)
+    return data
+
+
+# ============================================================================
+# 日志数据
+# ============================================================================
+
 ALL_LOGS = [
     # ========== data-sync-service ==========
     ("ERROR",   "data-sync-service", "数据库连接超时: connection to mysql://10.0.1.50:3306 timed out after 30s", -5),
@@ -41,7 +117,7 @@ ALL_LOGS = [
     ("INFO",    "web-server", "健康检查通过: /health 返回 200", -1),
     ("INFO",    "web-server", "优雅关闭: 已排空 45 个进行中请求", -30),
 
-    # ========== database (MySQL/PostgreSQL) ==========
+    # ========== database ==========
     ("ERROR",   "database", "主从复制中断: Slave_IO_Running=No, 错误: Got fatal error 1236 from master", -7),
     ("ERROR",   "database", "死锁检测: transaction id=8842912, 等待锁表 orders, 持有锁表 inventory", -11),
     ("ERROR",   "database", "磁盘空间不足: /data/mysql 使用率 92%，数据库写入被阻塞", -18),
@@ -74,7 +150,7 @@ ALL_LOGS = [
     ("WARNING", "auth-service", "Token 过期清理: 累积过期 token 12,000 个待清理", -11),
     ("INFO",    "auth-service", "OAuth2 客户端注册: 新增客户端 app-id=order_app_v2", -22),
 
-    # ========== monitoring (系统级) ==========
+    # ========== monitoring ==========
     ("ERROR",   "monitoring", "CPU 使用率持续高于 95%: web-server 节点 10.0.2.10 已持续 10 分钟", -5),
     ("ERROR",   "monitoring", "内存使用率超过 90%: database 节点 10.0.1.50 已触发 OOM Killer", -10),
     ("ERROR",   "monitoring", "磁盘空间告警: /var/log 分区使用率 95%，日志写入即将失败", -13),
@@ -100,79 +176,76 @@ ALL_LOGS = [
 ]
 
 
-def get_timestamp_us(minutes_ago: int) -> int:
-    """根据'多少分钟前'计算微秒时间戳"""
+def get_timestamp_ms(minutes_ago: int) -> int:
+    """根据'多少分钟前'计算毫秒时间戳"""
     target_time = datetime.now() + timedelta(minutes=minutes_ago)
-    return int(round(target_time.timestamp() * 1_000_000))
+    return int(round(target_time.timestamp() * 1000))
 
 
-def build_log_entry(log_group, level: str, service: str, message: str, minutes_ago: int):
-    """构建单条日志"""
-    log_entry = log_group.logs.add()
-    log_entry.time = get_timestamp_us(minutes_ago)
+def build_protobuf_body() -> bytes:
+    """构建 CLS UploadLog 需要的 protobuf 二进制数据"""
+    encoded_logs = []
+    for level, service, message, minutes_ago in ALL_LOGS:
+        timestamp_ms = get_timestamp_ms(minutes_ago)
+        contents = {
+            "level": level,
+            "service": service,
+            "message": message,
+            "source_host": f"10.0.{abs(hash(service)) % 256}.{abs(hash(message)) % 256}",
+        }
+        encoded_logs.append(encode_log(timestamp_ms, contents))
 
-    fields = [
-        ("level", level),
-        ("service", service),
-        ("message", message),
-        ("source_host", f"10.0.{hash(service) % 256}.{hash(message) % 256}"),
-    ]
-    for key, value in fields:
-        content = log_entry.contents.add()
-        content.key = key
-        content.value = value
+    log_group = encode_log_group(encoded_logs, source="10.0.0.1")
+    log_group_list = encode_log_group_list([log_group])
+    return log_group_list
 
 
-# ========== 主流程 ==========
-LogLogGroupList = LogGroupList()
-LogGroup = LogLogGroupList.logGroupList.add()
-LogGroup.filename = "test_logs_batch.log"
-LogGroup.source = "10.0.0.1"
+def upload_logs():
+    """使用主 SDK 上传日志"""
+    if not SECRET_ID or not SECRET_KEY:
+        print("ERROR: TENCENTCLOUD_SECRET_ID/KEY not configured in .env")
+        return 0
 
-# 添加标签
-LogTag = LogGroup.logTags.add()
-LogTag.key = "environment"
-LogTag.value = "production"
+    cred = credential.Credential(SECRET_ID, SECRET_KEY)
+    client = cls_client.ClsClient(cred, REGION)
 
-LogTag2 = LogGroup.logTags.add()
-LogTag2.key = "source"
-LogTag2.value = "upload_cls_logs.py"
+    body = build_protobuf_body()
+    print(f"   - Protobuf body size: {len(body)} bytes")
 
-# 按 service 分组构建日志
-for level, service, message, minutes_ago in ALL_LOGS:
-    build_log_entry(LogGroup, level, service, message, minutes_ago)
+    try:
+        req = cls_models.UploadLogRequest()
+        req.TopicId = TOPIC_ID
 
-# 发送请求
-try:
-    total_logs = len(LogGroup.logs)
+        resp = client.UploadLog(req, body)
+        print(f"   - Request ID: {resp.RequestId}")
+        return len(ALL_LOGS)
+
+    except TencentCloudSDKException as e:
+        print(f"   - Upload FAILED: {e.message}")
+        if hasattr(e, "code"):
+            print(f"   - Error code: {e.code}")
+        return 0
+
+
+if __name__ == "__main__":
+    print("Uploading logs to Tencent Cloud CLS...")
+    print(f"   - Region: {REGION}")
+    print(f"   - Topic ID: {TOPIC_ID}")
+    print(f"   - Total logs: {len(ALL_LOGS)}")
     services = set(log[1] for log in ALL_LOGS)
     levels = set(log[0] for log in ALL_LOGS)
-
-    print(f"Uploading logs to Tencent Cloud CLS...")
-    print(f"   - Endpoint: {endpoint}")
-    print(f"   - Topic ID: {topic_id}")
-    print(f"   - Total logs: {total_logs}")
     print(f"   - Services: {', '.join(sorted(services))}")
     print(f"   - Levels: {', '.join(sorted(levels))}")
-    print(f"   - Time range: {ALL_LOGS[-1][3]} min ago ~ {ALL_LOGS[0][3]} min ago")
     print()
 
-    request = client.put_log_raw(topic_id, LogLogGroupList)
-    print(f"Upload success!")
-    print(f"   - Request ID: {request.get_request_id()}")
-    print(f"\nTest suggestions:")
-    print(f"   1. Go to CLS console -> region {region} -> topic {topic_id}")
-    print(f"   2. Set time range to 'Last 1 hour'")
-    print(f"   3. Try these natural language queries with AIOps Agent:")
-    print(f"      - 'query all ERROR level logs'")
-    print(f"      - 'any recent errors?'")
-    print(f"      - 'what problems does data-sync-service have?'")
-    print(f"      - 'how is the database doing recently?'")
-    print(f"      - 'check cache service memory usage'")
-    print(f"      - 'any alerts in the last 15 minutes?'")
-
-except LogException as e:
-    print(f"Upload failed: {e}")
-    print(f"   - Error Code: {e.get_error_code()}")
-    print(f"   - Error Message: {e.get_error_msg()}")
-
+    count = upload_logs()
+    if count:
+        print(f"\nUpload success! {count} logs uploaded.")
+        print(f"\nNext steps:")
+        print(f"   1. Start CLS MCP server: uv run python mcp_servers/cls_server.py")
+        print(f"   2. Try these queries with AIOps Agent:")
+        print(f"      - 'data-sync-service 最近有什么 ERROR 日志？'")
+        print(f"      - 'database 主库是不是挂了？'")
+        print(f"      - 'web-server 有哪些异常？'")
+    else:
+        print("\nUpload failed.")

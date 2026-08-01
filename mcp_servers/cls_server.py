@@ -1,19 +1,35 @@
 """腾讯云 CLS (Cloud Log Service) MCP Server
 
-本地实现的 CLS 日志服务 MCP Server，提供日志查询、检索和分析功能。
+提供日志查询、检索和分析功能。
+通过腾讯云 CLS API 查询真实日志数据。
 """
 
 import logging
 import functools
 import json
+import os
+import time
+from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
-from fastmcp import FastMCP
 
-# 模拟数据服务固定配置（不加载任何 .env，避免与根目录 .env 或腾讯云 .env 冲突）
-TRANSPORT = 'sse'
-PORT = 3000
-HOST = '127.0.0.1'
+from dotenv import load_dotenv
+from fastmcp import FastMCP
+from tencentcloud.common import credential
+from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
+from tencentcloud.cls.v20201016 import cls_client, models as cls_models
+
+# 加载项目根目录的 .env，读腾讯云密钥
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(_PROJECT_ROOT / ".env")
+
+TRANSPORT = os.getenv("CLS_TRANSPORT", "sse")
+PORT = int(os.getenv("CLS_PORT", "3000"))
+HOST = os.getenv("CLS_HOST", "127.0.0.1")
+DEFAULT_REGION = os.getenv("CLS_DEFAULT_REGION", "ap-guangzhou")
+
+SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID", "")
+SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY", "")
 
 # 配置日志
 logging.basicConfig(
@@ -23,6 +39,25 @@ logging.basicConfig(
 logger = logging.getLogger("CLS_MCP_Server")
 
 mcp = FastMCP("CLS")
+
+
+def _get_cls_client(region: Optional[str] = None) -> cls_client.ClsClient:
+    """创建腾讯云 CLS 客户端
+
+    Args:
+        region: 区域代码，默认从环境变量读取，fallback 到 ap-guangzhou
+
+    Returns:
+        ClsClient 实例
+    """
+    target_region = region or DEFAULT_REGION
+    cred = credential.Credential(SECRET_ID, SECRET_KEY)
+    return cls_client.ClsClient(cred, target_region)
+
+
+def _has_credentials() -> bool:
+    """检查是否配置了腾讯云密钥"""
+    return bool(SECRET_ID and SECRET_KEY)
 
 
 def log_tool_call(func):
@@ -284,68 +319,94 @@ def search_topic_by_service_name(
             end_time=current_ts
         )
     """
-    # Mock 主题数据（实际应该从配置或数据库读取）
-    mock_topics = [
-        {
-            "topic_id": "topic-001",
-            "topic_name": "数据同步服务日志",
-            "service_name": "data-sync-service",
-            "region_code": "ap-beijing",
-            "create_time": "2024-01-01 10:00:00",
-            "log_count": 0,
-            "description": "数据同步服务的应用日志，包含同步任务执行情况"
-        },
-        {
-            "topic_id": "topic-002",
-            "topic_name": "数据同步服务错误日志",
-            "service_name": "data-sync-service",
-            "region_code": "ap-beijing",
-            "create_time": "2024-01-01 10:00:00",
-            "log_count": 0,
-            "description": "数据同步服务的错误日志"
-        },
-        {
-            "topic_id": "topic-003",
-            "topic_name": "API网关服务日志",
-            "service_name": "api-gateway-service",
-            "region_code": "ap-shanghai",
-            "create_time": "2024-01-01 10:00:00",
-            "log_count": 0,
-            "description": "API网关服务日志"
+    if not _has_credentials():
+        logger.warning("腾讯云密钥未配置，无法查询日志主题")
+        return {
+            "total": 0,
+            "topics": [],
+            "query": {"service_name": service_name, "region_code": region_code, "fuzzy": fuzzy},
+            "message": "腾讯云密钥未配置，请在 .env 中设置 TENCENTCLOUD_SECRET_ID 和 TENCENTCLOUD_SECRET_KEY"
         }
-    ]
-    
-    matched_topics = []
-    
-    # 搜索逻辑
-    for topic in mock_topics:
-        # 地区筛选
-        if region_code and topic["region_code"] != region_code:
-            continue
-        
-        # 服务名称匹配
-        topic_service_name = topic.get("service_name", "")
-        
-        if fuzzy:
-            # 模糊匹配：服务名包含查询字符串，或查询字符串包含服务名
-            if (service_name.lower() in topic_service_name.lower() or 
-                topic_service_name.lower() in service_name.lower()):
-                matched_topics.append(topic)
-        else:
-            # 精确匹配
-            if topic_service_name == service_name:
-                matched_topics.append(topic)
-    
-    return {
-        "total": len(matched_topics),
-        "topics": matched_topics,
-        "query": {
-            "service_name": service_name,
-            "region_code": region_code,
-            "fuzzy": fuzzy
-        },
-        "message": f"找到 {len(matched_topics)} 个匹配的日志主题" if matched_topics else f"未找到服务 '{service_name}' 的日志主题"
-    }
+
+    search_region = region_code or DEFAULT_REGION
+    client = _get_cls_client(search_region)
+
+    try:
+        req = cls_models.DescribeTopicsRequest()
+        topic_filter = cls_models.Filter()
+        topic_filter.Key = "topicName"
+        topic_filter.Values = [service_name]
+        req.Filters = [topic_filter]
+        req.Offset = 0
+        req.Limit = 100
+
+        resp = client.DescribeTopics(req)
+
+        matched_topics = []
+        for topic in resp.Topics:
+            topic_name = topic.TopicName or ""
+            topic_id = topic.TopicId or ""
+
+            if fuzzy:
+                if service_name.lower() not in topic_name.lower():
+                    continue
+            else:
+                if topic_name != service_name:
+                    continue
+
+            matched_topics.append({
+                "topic_id": topic_id,
+                "topic_name": topic_name,
+                "service_name": topic_name,
+                "region_code": search_region,
+                "create_time": topic.CreateTime or "",
+                "log_count": 0,
+                "description": f"日志主题 {topic_name}（{search_region}）"
+            })
+
+        if matched_topics:
+            return {
+                "total": len(matched_topics),
+                "topics": matched_topics,
+                "query": {"service_name": service_name, "region_code": region_code, "fuzzy": fuzzy},
+                "message": f"找到 {len(matched_topics)} 个匹配的日志主题"
+            }
+
+        # Fallback: 按主题名没搜到，列出所有可用主题供 Agent 选择
+        logger.info(f"按名称 '{service_name}' 未匹配到 topic，列出全部")
+        all_req = cls_models.DescribeTopicsRequest()
+        all_req.Offset = 0
+        all_req.Limit = 100
+        all_resp = client.DescribeTopics(all_req)
+
+        all_topics = []
+        for topic in all_resp.Topics:
+            all_topics.append({
+                "topic_id": topic.TopicId or "",
+                "topic_name": topic.TopicName or "",
+                "service_name": topic.TopicName or "",
+                "region_code": search_region,
+                "create_time": topic.CreateTime or "",
+                "log_count": 0,
+                "description": f"日志主题 {topic.TopicName or ''}（{search_region}）"
+            })
+
+        return {
+            "total": len(all_topics),
+            "topics": all_topics,
+            "query": {"service_name": service_name, "region_code": region_code, "fuzzy": fuzzy},
+            "message": f"按名称未匹配，返回全部 {len(all_topics)} 个可用日志主题"
+        }
+
+    except TencentCloudSDKException as e:
+        logger.error(f"DescribeTopics 调用失败: {e}")
+        return {
+            "total": 0,
+            "topics": [],
+            "query": {"service_name": service_name, "region_code": region_code, "fuzzy": fuzzy},
+            "error": f"CLS API 调用失败: {e.message}",
+            "message": f"查询失败: {e.message}"
+        }
 
 
 @mcp.tool()
@@ -413,49 +474,8 @@ def search_log(
             limit=100
         )
     """
-    # 根据 topic_id 返回不同的结果
-    if topic_id == "topic-001":
-        # topic-001: 应用日志，动态生成 INFO 日志
-        logs = []
-        current_time_ms = start_time
-        count = 0
-
-        # 计算最大可生成的日志条数（基于时间范围）
-        max_logs_by_time = int((end_time - start_time) / (60 * 1000)) + 1
-
-        # 实际生成的日志数量取 limit 和时间范围内最大日志数的较小值
-        actual_limit = min(limit, max_logs_by_time)
-
-        while current_time_ms <= end_time and count < actual_limit:
-            # 将毫秒时间戳转换为可读格式
-            log_time = datetime.fromtimestamp(current_time_ms / 1000)
-            time_str = log_time.strftime("%Y-%m-%d %H:%M:%S")
-
-            log_entry = {
-                "timestamp": time_str,
-                "level": "INFO",
-                "message": "正在同步元数据……"
-            }
-
-            logs.append(log_entry)
-            count += 1
-
-            # 下一条日志时间增加1分钟（60秒 * 1000毫秒）
-            current_time_ms += 60 * 1000
-
-        return {
-            "topic_id": topic_id,
-            "start_time": start_time,
-            "end_time": end_time,
-            "query": query,
-            "limit": limit,
-            "total": len(logs),
-            "logs": logs,
-            "took_ms": 50,
-            "message": f"成功查询 {len(logs)} 条应用日志"
-        }
-    else:
-        # 其他 topic_id: 返回错误，表示 topic 不存在
+    if not _has_credentials():
+        logger.warning("腾讯云密钥未配置，无法搜索日志")
         return {
             "topic_id": topic_id,
             "start_time": start_time,
@@ -465,8 +485,76 @@ def search_log(
             "total": 0,
             "logs": [],
             "took_ms": 0,
-            "error": f"主题不存在: {topic_id}",
-            "message": f"错误: 未找到主题 {topic_id}，请检查 topic_id 是否正确"
+            "error": "腾讯云密钥未配置",
+            "message": "腾讯云密钥未配置，请在 .env 中设置 TENCENTCLOUD_SECRET_ID 和 TENCENTCLOUD_SECRET_KEY"
+        }
+
+    client = _get_cls_client(DEFAULT_REGION)
+
+    try:
+        req = cls_models.SearchLogRequest()
+        req.TopicId = topic_id
+        req.From = start_time
+        req.To = end_time
+        req.Query = query or "*"
+        req.Limit = limit
+        req.Sort = "desc"
+
+        t_start = time.time()
+        resp = client.SearchLog(req)
+        t_end = time.time()
+        took_ms = int((t_end - t_start) * 1000)
+
+        logs = []
+        if resp.Results:
+            for result in resp.Results:
+                try:
+                    parsed = json.loads(result.LogJson) if isinstance(result.LogJson, str) else result.LogJson
+                except (json.JSONDecodeError, TypeError):
+                    parsed = {"message": str(result.LogJson)}
+
+                log_time = datetime.fromtimestamp(result.Time / 1000) if result.Time else None
+                time_str = log_time.strftime("%Y-%m-%d %H:%M:%S") if log_time else ""
+
+                log_entry = {
+                    "timestamp": time_str,
+                    "timestamp_ms": result.Time,
+                    "level": parsed.get("level", ""),
+                    "service": parsed.get("service", ""),
+                    "message": parsed.get("message", str(parsed)),
+                    "source_host": parsed.get("source_host", ""),
+                }
+                logs.append(log_entry)
+
+        total_found = resp.Analysis and len(resp.AnalysisRecords or [])
+        if not total_found:
+            total_found = len(logs)
+
+        return {
+            "topic_id": topic_id,
+            "start_time": start_time,
+            "end_time": end_time,
+            "query": query,
+            "limit": limit,
+            "total": len(logs),
+            "logs": logs,
+            "took_ms": took_ms,
+            "message": f"成功查询 {len(logs)} 条日志（耗时 {took_ms}ms）"
+        }
+
+    except TencentCloudSDKException as e:
+        logger.error(f"SearchLog 调用失败: {e}")
+        return {
+            "topic_id": topic_id,
+            "start_time": start_time,
+            "end_time": end_time,
+            "query": query,
+            "limit": limit,
+            "total": 0,
+            "logs": [],
+            "took_ms": 0,
+            "error": f"CLS API 调用失败: {e.message}",
+            "message": f"SearchLog 失败: {e.message}"
         }
 
 

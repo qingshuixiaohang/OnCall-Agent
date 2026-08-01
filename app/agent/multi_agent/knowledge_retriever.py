@@ -6,11 +6,13 @@
 
 设计决策：
 1. 直接复用现有 retrieve_knowledge 工具，不重新实现检索逻辑
-2. 返回知识库上下文原文，不做额外压缩，保留完整信息给下游
+2. 不需要 LLM（纯检索），因此不继承 BaseSpecialist 的 LLM 创建逻辑
+   但为统一接口仍继承 BaseSpecialist，只是永远不会访问 self.llm
 3. 检索失败时返回降级结果，而不是抛出异常
+4. 移除旧版硬编码的假 confidence 值（0.9/0.3），改为基于实际文档数量的简单判断
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Tuple, Union
 from langchain_core.documents import Document
 from loguru import logger
 
@@ -20,7 +22,7 @@ from app.agent.multi_agent.base_specialist import BaseSpecialist
 
 
 class KnowledgeRetriever(BaseSpecialist):
-    """知识库检索 Specialist"""
+    """知识库检索 Specialist（纯检索，不使用 LLM）"""
 
     def __init__(self) -> None:
         super().__init__(
@@ -48,34 +50,37 @@ class KnowledgeRetriever(BaseSpecialist):
                 for i, doc in enumerate(docs, 1)
             ]
 
+            # confidence 基于实际检索到的文档数量，而非硬编码
+            confidence = min(len(docs) / 5.0, 1.0) if docs else 0.0
+
             return {
                 "knowledge_context": context,
                 "knowledge_retrieval": {
                     "documents": doc_info,
                     "doc_count": len(docs),
-                    "confidence": 0.9 if docs else 0.3,
+                    "confidence": confidence,
                 },
-                "completed_tasks": [f"完成 knowledge_retriever 分析"],
+                "completed_tasks": [f"完成 {self.name} 检索"],
             }
 
         except Exception as e:
             logger.error(f"知识库检索失败: {e}")
             return {
-                "knowledge_context": f"知识库检索失败: {str(e)}",
+                "knowledge_context": "",
                 "knowledge_retrieval": {
                     "documents": [],
                     "doc_count": 0,
                     "confidence": 0.0,
                 },
-                "completed_tasks": [f"完成 knowledge_retriever 分析"],
+                "completed_tasks": [f"完成 {self.name} 检索（降级）"],
             }
 
-    def _normalize_result(self, result: Any):
-        """
-        兼容工具返回格式
-        
-        预期返回值格式为 (context: str, docs: List[Document])。
-        若返回格式发生变化，这里集中做兼容处理，避免分散在各个调用点。
+    def _normalize_result(self, result: Any) -> Tuple[str, List[Document]]:
+        """兼容工具返回格式
+
+        retrieve_knowledge 使用 response_format="content_and_artifact"，
+        ainvoke() 可能只返回 content（字符串），也可能返回元组。
+        这里集中做兼容处理。
         """
         if isinstance(result, tuple) and len(result) == 2:
             context, docs = result

@@ -2,17 +2,24 @@
 
 设计决策：
 1. 抽象基类确保所有 Specialist 都有统一的 run() 接口
-2. 通用 LLM 创建逻辑集中在基类，避免重复
-3. 子类只需实现 _execute()，关注各自的核心逻辑
+2. LLM 延迟创建（property），不需要 LLM 的 Specialist 不会白白占资源
+3. 提供 run_with_tools() 通用 ReAct 辅助方法，让 Specialist 自主选工具
+4. Mem0 记忆注入在 run() 中统一完成，子类 _execute() 无需关心
 """
 
+import json
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
+
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.tools import BaseTool
 from langchain_qwq import ChatQwen
+from langgraph.prebuilt import ToolNode
 from loguru import logger
 
 from app.config import config
 from app.agent.multi_agent.state import MultiAgentState
+from app.core.mem0_manager import search_memory
 
 
 class BaseSpecialist(ABC):
@@ -21,31 +28,44 @@ class BaseSpecialist(ABC):
     def __init__(self, name: str, description: str):
         self.name = name
         self.description = description
-        self.llm = self._create_llm()
+        self._llm: Optional[ChatQwen] = None  # 延迟创建
 
-    def _create_llm(self) -> ChatQwen:
-        """从配置创建 LLM 实例，保持与现有代码一致"""
-        return ChatQwen(
-            model=config.rag_model,
-            api_key=config.dashscope_api_key,
-            temperature=0,
-        )
+    @property
+    def llm(self) -> ChatQwen:
+        """延迟创建 LLM 实例，不需要 LLM 的 Specialist 不会触发创建"""
+        if self._llm is None:
+            self._llm = ChatQwen(
+                model=config.rag_model,
+                api_key=config.dashscope_api_key,
+                temperature=0,
+            )
+        return self._llm
 
     @abstractmethod
     async def _execute(self, state: MultiAgentState) -> Dict[str, Any]:
-        """子类必须实现： Specialist 的核心执行逻辑"""
+        """子类必须实现：Specialist 的核心执行逻辑"""
         ...
 
     async def run(self, state: MultiAgentState) -> Dict[str, Any]:
-        """
-        执行 Specialist 的完整流程
-        
-        统一包装执行逻辑，记录日志并处理异常，
-        确保每个 Specialist 失败时不会拖垮整个系统。
+        """执行 Specialist 的完整流程（统一异常包装 + Mem0 记忆注入）
+
+        注意：Mem0 记忆注入统一在这里完成。
+        子类的 _execute() 收到的 state["user_input"] 已经包含历史经验，
+        不需要自己再查一次 Mem0。
         """
         logger.info(f"=== {self.name} 开始执行 ===")
 
         try:
+            # === Mem0 记忆注入：在 _execute 之前把历史经验塞进 user_input ===
+            user_input = state.get("user_input", "")
+            if user_input:
+                memory_context = search_memory(query=user_input, limit=3)
+                if memory_context:
+                    state["user_input"] = f"{user_input}\n\n{memory_context}"
+                    logger.info(
+                        f"[{self.name}] 注入 {len(memory_context)} 字记忆上下文"
+                    )
+
             result = await self._execute(state)
             result.setdefault("specialist_name", self.name)
             result.setdefault("status", "success")
@@ -59,3 +79,76 @@ class BaseSpecialist(ABC):
                 "status": "error",
                 "error": str(e),
             }
+
+    async def run_with_tools(
+        self,
+        task: str,
+        tools: List[BaseTool],
+        system_prompt: str,
+        max_steps: int = 2,
+    ) -> str:
+        """有界 ReAct 循环：让 LLM 自主选工具并执行
+
+        这是一个通用的工具调用辅助方法，Specialist 不再硬编码调哪个工具，
+        而是把可用工具列表交给 LLM，由 LLM 决定调用哪个工具、传什么参数。
+
+        与 Plan-Execute-Replan 的 Executor 区别：
+        - 这里只给 Specialist 领域相关的工具子集（而非全部工具）
+        - max_steps 限制为 2，避免无限循环
+        - LLM 选完工具并执行后，直接基于结果生成分析摘要
+
+        Args:
+            task: 要执行的任务描述
+            tools: 可用工具列表（领域相关子集）
+            system_prompt: Specialist 的角色提示词
+            max_steps: 最大工具调用轮次（默认 2）
+
+        Returns:
+            LLM 基于工具结果生成的分析文本
+        """
+        llm_with_tools = self.llm.bind_tools(tools)
+        tool_node = ToolNode(tools)
+
+        messages: List = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=task),
+        ]
+
+        for step in range(max_steps):
+            response = await llm_with_tools.ainvoke(messages)
+
+            if not hasattr(response, "tool_calls") or not response.tool_calls:
+                # LLM 认为不需要工具，直接返回分析
+                return response.content if hasattr(response, "content") else str(response)
+
+            # LLM 选择了工具 → 执行
+            for tc in response.tool_calls:
+                logger.info(f"[{self.name}] 调用工具: {tc['name']}, 参数: {tc['args']}")
+
+            messages.append(response)
+            tool_messages = await tool_node.ainvoke({"messages": messages})
+            messages.extend(tool_messages["messages"])
+
+            # 检查工具结果中是否有错误
+            for msg in tool_messages["messages"]:
+                if hasattr(msg, "content") and isinstance(msg.content, str):
+                    try:
+                        parsed = json.loads(msg.content)
+                        if isinstance(parsed, dict) and "error" in parsed:
+                            logger.warning(f"[{self.name}] 工具返回错误: {parsed['error']}")
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+        # 达到 max_steps 后，让 LLM 基于已收集的数据做最终分析
+        logger.info(f"[{self.name}] 工具调用达到上限({max_steps})，生成最终分析")
+        final_response = await self.llm.ainvoke(messages)
+        return final_response.content if hasattr(final_response, "content") else str(final_response)
+
+    async def get_tools_by_names(
+        self,
+        all_tools: List[BaseTool],
+        names: List[str],
+    ) -> List[BaseTool]:
+        """从全部工具中筛选出本 Specialist 需要的工具子集"""
+        tool_map = {tool.name: tool for tool in all_tools}
+        return [tool_map[name] for name in names if name in tool_map]

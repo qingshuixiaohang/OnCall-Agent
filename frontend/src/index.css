@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: #0b1220;
+  color: #e2e8f0;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #1e3a5f; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #2b5278; }
+
+/* markdown 渲染 */
+.md-body { line-height: 1.7; font-size: 0.9rem; }
+.md-body h1 { font-size: 1.3rem; font-weight: 700; margin: 0.8em 0 0.4em; color: #fff; }
+.md-body h2 { font-size: 1.1rem; font-weight: 700; margin: 0.7em 0 0.35em; color: #e2e8f0; border-bottom: 1px solid #1e3a5f; padding-bottom: 0.25em; }
+.md-body h3 { font-size: 1rem; font-weight: 600; margin: 0.6em 0 0.3em; color: #34d399; }
+.md-body p { margin: 0.5em 0; }
+.md-body ul, .md-body ol { margin: 0.5em 0; padding-left: 1.4em; }
+.md-body li { margin: 0.2em 0; }
+.md-body code { font-family: "JetBrains Mono", ui-monospace, monospace; background: rgba(16,185,129,0.12); padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.85em; color: #6ee7b7; }
+.md-body pre { background: #0b1220; border: 1px solid #1e3a5f; border-radius: 8px; padding: 0.9em; overflow-x: auto; margin: 0.6em 0; }
+.md-body pre code { background: none; padding: 0; color: #e2e8f0; font-size: 0.82rem; }
+.md-body a { color: #34d399; text-decoration: underline; }
+.md-body strong { color: #fff; font-weight: 600; }
+.md-body blockquote { border-left: 3px solid #10b981; padding-left: 0.8em; color: #94a3b8; margin: 0.5em 0; }
+.md-body table { border-collapse: collapse; margin: 0.5em 0; width: 100%; }
+.md-body th, .md-body td { border: 1px solid #1e3a5f; padding: 0.35em 0.6em; text-align: left; }
+.md-body th { background: rgba(16,185,129,0.1); color: #fff; }
+
+/* highlight.js 暗色覆盖 */
+.hljs { background: transparent !important; }

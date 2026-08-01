@@ -48,7 +48,7 @@ class VectorStoreManager:
                 text_field="content",  # 文本内容存储到 content 字段
                 vector_field="vector",  # 向量存储到 vector 字段
                 primary_field="id",  # 主键字段
-                metadata_field="metadata",  # 元数据字段
+                enable_dynamic_field=True,  # 动态字段（替代已废弃的 metadata_field）
             )
 
             logger.info(

@@ -172,12 +172,17 @@ def _create_mcp_client(
     Returns:
         MultiServerMCPClient: 未初始化的客户端实例
     """
-    # MultiServerMCPClient 的第一个参数直接接收 servers 配置字典
-    # 格式: {server_name: {"transport": "...", "url": "..."}}
+    # 给每个 server 注入连接超时，避免 MCP server 未就绪时卡死（httpcore.ConnectTimeout）
+    # timeout=10s：连接+读取总超时；server 刚启动还在初始化时快速失败交给 retry_interceptor 重试
+    timeouted = {}
+    for name, cfg in servers.items():
+        c = dict(cfg)
+        c.setdefault("timeout", 10)
+        timeouted[name] = c
     kwargs: Dict[str, Any] = {}
     
     if tool_interceptors:
         kwargs["tool_interceptors"] = tool_interceptors
     
     # 第一个参数是 servers 配置，直接传递
-    return MultiServerMCPClient(servers, **kwargs)  # type: ignore[arg-type]
+    return MultiServerMCPClient(timeouted, **kwargs)  # type: ignore[arg-type]

@@ -31,7 +31,7 @@ class Settings(BaseSettings):
 
     # DashScope 配置（对话模型）
     dashscope_api_key: str = ""  # 默认空字符串，实际使用需从环境变量加载
-    dashscope_model: str = "qwen3.7-max"
+    dashscope_model: str = "qwen3.7-plus"
 
     # SiliconFlow 配置（嵌入向量模型）
     siliconflow_api_key: str = ""
@@ -45,10 +45,11 @@ class Settings(BaseSettings):
 
     # RAG 配置
     rag_top_k: int = 3
-    rag_model: str = "qwen3.7-max"  # 使用快速响应模型，不带扩展思考
+    rag_model: str = "qwen3.7-plus"  # 使用快速响应模型，不带扩展思考
 
-    # 重排模型配置（阿里云百炼 DashScope Rerank API）
-    rerank_model: str = "gte-rerank"  # 重排模型名称
+    # 重排模型配置
+    rerank_backend: str = "siliconflow"  # 重排后端：siliconflow（免费）或 dashscope（阿里云百炼）
+    rerank_model: str = "BAAI/bge-reranker-v2-m3"  # SiliconFlow 免费重排模型
     rag_retrieval_k: int = 9  # 粗排召回数量（重排前的候选文档数，建议为 rag_top_k 的 2-3 倍）
 
     # 文档分块配置
@@ -56,8 +57,8 @@ class Settings(BaseSettings):
     chunk_overlap: int = 100
 
     # MCP 服务配置
-    mcp_cls_transport: str = "streamable-http"
-    mcp_cls_url: str = "http://localhost:8003/mcp"
+    mcp_cls_transport: str = "sse"
+    mcp_cls_url: str = "http://localhost:3000/sse"
     mcp_monitor_transport: str = "streamable-http"
     mcp_monitor_url: str = "http://localhost:8004/mcp"
 
@@ -93,5 +94,13 @@ class Settings(BaseSettings):
         }
 
 
+class Mem0Config(BaseSettings):
+    mem0_backend: str = "sqlite"  # sqlite | postgres | qdrant
+    mem0_sqlite_path: str = "./volumes/mem0.db"
+
+    model_config = {"env_prefix": ""}
+
+
+mem0_config = Mem0Config()
 # 全局配置实例
 config = Settings()

@@ -5,37 +5,47 @@
 2. 构建主 StateGraph 并编译
 3. 提供统一的 execute() 接口供上层调用
 
-设计决策（P1 优化）：
+设计决策：
 1. 主图采用 Supervisor + 并行 Specialist + Aggregator 结构
 2. Supervisor 通过 LangGraph Send API 实现 Specialist 并行触发
 3. 所有 Specialist 完成后自动汇聚到 aggregator 节点
 4. 无依赖 Specialist 真正并行执行，减少总耗时
-5. 提供 async_generator 风格的 execute()，与现有 aiops_service.py 兼容
+5. Aggregator 使用 LLM 做跨专家综合分析（而非简单字符串拼接）
+6. 使用 LangGraph 原生 checkpointer 持久化
+
+持久化说明：
+- 主图使用统一 checkpointer（AsyncSqliteSaver / AsyncPostgresSaver）
+- Specialist 子图为无状态执行，不单独持久化
+- 会话状态通过 thread_id 隔离，支持重启后续接
 """
 
+from textwrap import dedent
 from typing import AsyncGenerator, Dict, Any, List, Union
+from langchain_core.prompts import ChatPromptTemplate
 from langgraph.constants import Send
 from langgraph.graph import END, START, StateGraph
-from langgraph.checkpoint.memory import MemorySaver
+from langchain_qwq import ChatQwen
 from loguru import logger
 
+from app.config import config
 from app.agent.multi_agent.state import MultiAgentState
 from app.agent.multi_agent.supervisor import supervisor_node
 from app.agent.multi_agent.log_analyzer import LogAnalyzer
 from app.agent.multi_agent.monitor_expert import MonitorExpert
 from app.agent.multi_agent.knowledge_retriever import KnowledgeRetriever
-from app.agent.multi_agent.supervisor import build_specialist_subgraph, _run_parallel
-
+from app.agent.multi_agent.supervisor import build_specialist_subgraph
+from app.core.checkpointer import get_checkpointer, thread_id_with_prefix
+from app.core.mem0_manager import save_memory
 
 class MultiAgentService:
-    """
-    Multi-Agent 服务
-    
+    """Multi-Agent 服务
+
     组装 Supervisor + Specialist 子图，提供统一执行接口。
+    graph 延迟编译（等 lifespan 初始化 checkpointer 后）。
     """
 
     def __init__(self):
-        """初始化服务，预编译所有子图"""
+        """初始化服务，预编译子图，主图延迟编译"""
         logger.info("初始化 Multi-Agent Service...")
 
         # 1. 创建 Specialist 实例
@@ -43,7 +53,7 @@ class MultiAgentService:
         self.monitor_expert = MonitorExpert()
         self.knowledge_retriever = KnowledgeRetriever()
 
-        # 2. 预编译子图
+        # 2. 预编译子图（子图无状态，不需要 checkpointer）
         self.subgraphs = {
             "log_analyzer": build_specialist_subgraph("log_analyzer", self.log_analyzer),
             "monitor_expert": build_specialist_subgraph("monitor_expert", self.monitor_expert),
@@ -53,47 +63,35 @@ class MultiAgentService:
         }
         logger.info(f"子图编译完成: {list(self.subgraphs.keys())}")
 
-        # 3. 编译主图
-        self.graph = self._build_graph()
-        logger.info("Multi-Agent 主图编译完成")
+        # 3. 主图延迟编译（在 execute 中首次调用时）
+        self._workflow = None
+        self._graph = None
 
-    def _build_graph(self) -> StateGraph:
-        """
-        构建主工作流图
-        
-        结构：
-        START -> supervisor -> [并行 Specialist] -> aggregator -> END
-        
-        并行机制（P1 优化）：
-        - Supervisor 路由决策后，通过 LangGraph Send API 并行触发所有选中的 Specialist
-        - 无依赖的 Specialist 真正并行执行，减少总耗时
-        - 所有 Specialist 完成后自动汇聚到 aggregator 节点
+    def _build_workflow(self) -> StateGraph:
+        """构建主工作流（尚未编译）
+
+        结构：START -> supervisor -> [并行 Specialist] -> aggregator -> END
         """
         workflow = StateGraph(MultiAgentState)
 
-        # 添加节点
         workflow.add_node("supervisor", supervisor_node)
         workflow.add_node("log_analyzer", self.log_analyzer.run)
         workflow.add_node("monitor_expert", self.monitor_expert.run)
         workflow.add_node("knowledge_retriever", self.knowledge_retriever.run)
         workflow.add_node("aggregator", self._aggregate_results)
 
-        # 入口
         workflow.add_edge(START, "supervisor")
 
-        # Supervisor 后的条件边：使用 Send 实现并行路由
         def route_from_supervisor(state: MultiAgentState) -> List[Union[str, Send]]:
-            """根据路由决策并行触发 Specialist（P1 优化：支持并行）"""
+            """根据路由决策并行触发 Specialist"""
             routing = state.get("routing", [])
             if not routing:
                 return [Send("aggregator", {})]
-            
+
             specialists = routing[-1].get("specialists", [])
             if not specialists:
                 return [Send("aggregator", {})]
-            
-            # 并行触发所有选中的 Specialist
-            # 修复：传递 user_input，否则 Specialist 收不到用户问题
+
             user_input = state.get("user_input", "")
             return [Send(s, {"user_input": user_input}) for s in specialists]
 
@@ -108,29 +106,34 @@ class MultiAgentService:
             }
         )
 
-        # 所有 Specialist 完成后汇聚到 aggregator（P1 优化：fan-in 结构）
         workflow.add_edge("log_analyzer", "aggregator")
         workflow.add_edge("monitor_expert", "aggregator")
         workflow.add_edge("knowledge_retriever", "aggregator")
         workflow.add_edge("aggregator", END)
 
-        # 添加检查点以支持会话持久化
-        checkpointer = MemorySaver()
-        return workflow.compile(checkpointer=checkpointer)
-    
+        return workflow
+
+    async def _get_graph(self):
+        """获取编译后的主图（延迟编译，带持久化）"""
+        if self._graph is None:
+            if self._workflow is None:
+                self._workflow = self._build_workflow()
+            checkpointer = get_checkpointer()
+            self._graph = self._workflow.compile(checkpointer=checkpointer)
+            logger.info("Multi-Agent 主图已编译（含 checkpointer 持久化）")
+        return self._graph
+
     async def _aggregate_results(self, state: MultiAgentState) -> Dict[str, Any]:
+        """聚合节点：收集所有 Specialist 的结果，用 LLM 做跨专家综合分析
+
+        与旧版区别：
+        - 旧版：把三个 Specialist 的文本拼接在一起（没有交叉推理）
+        - 新版：让 LLM 综合所有专家发现，做关联分析和交叉推理
         """
-        聚合节点：收集所有 Specialist 的结果并生成最终报告
-        
-        这个节点会在所有选中的 Specialist 执行完成后运行。
-        """
-        logger.info("=== 聚合节点：生成最终报告 ===")
-        
+        logger.info("=== 聚合节点：综合分析 Specialist 结果 ===")
         report = await self._generate_final_report(state)
-        
         return {
             "final_report": report,
-            "completed_tasks": state.get("completed_tasks", []),
         }
 
     async def execute(
@@ -138,51 +141,46 @@ class MultiAgentService:
         user_input: str,
         session_id: str = "default",
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        """
-        执行 Multi-Agent 流程
-        
-        Args:
-            user_input: 用户的任务描述
-            session_id: 会话 ID（用于持久化，当前版本暂未启用）
-        
-        Yields:
-            Dict[str, Any]: 流式事件，包含：
-                - {"type": "routing", "specialists": [...], "reason": "..."}
-                - {"type": "specialist_result", "name": "...", "result": {...}}
-                - {"type": "complete", "report": "..."}
-                - {"type": "error", "message": "..."}
-        """
+        """执行 Multi-Agent 流程（统一 checkpointer 持久化）"""
+        graph = await self._get_graph()
+        thread_id = thread_id_with_prefix(session_id, "multi")
+        config_dict = {"configurable": {"thread_id": thread_id}}
+
         logger.info(f"[会话 {session_id}] 开始 Multi-Agent 执行: {user_input[:100]}...")
 
         try:
-            # 初始化状态
-            initial_state: MultiAgentState = {
-                "messages": [],
-                "user_input": user_input,
-                "routing": [],
-                "log_analysis": None,
-                "monitor_metrics": None,
-                "knowledge_context": None,
-                "task_plan": [],
-                "completed_tasks": [],
-                "final_report": None,
-                "error": None,
-            }
-
-            # 配置会话持久化
-            config = {
-                "configurable": {
-                    "thread_id": session_id
+            snapshot = await graph.aget_state(config_dict)
+            if snapshot and snapshot.values:
+                initial_state = dict(snapshot.values)
+                initial_state["user_input"] = user_input
+                initial_state["final_report"] = None
+                initial_state["error"] = None
+                logger.info(
+                    f"[会话 {session_id}] 从 checkpoint 恢复状态，"
+                    f"completed_tasks: {len(initial_state.get('completed_tasks', []))}"
+                )
+            else:
+                initial_state: MultiAgentState = {
+                    "messages": [],
+                    "user_input": user_input,
+                    "routing": [],
+                    "log_analysis": None,
+                    "monitor_metrics": None,
+                    "knowledge_context": None,
+                    "task_plan": [],
+                    "completed_tasks": [],
+                    "final_report": None,
+                    "error": None,
                 }
-            }
+                logger.info(f"[会话 {session_id}] 无历史状态，全新执行")
 
-            # 执行主图
-            async for event in self.graph.astream(initial_state, config=config, stream_mode="updates"):
+            async for event in graph.astream(
+                initial_state, config=config_dict, stream_mode="updates"
+            ):
                 for node_name, node_output in event.items():
                     logger.debug(f"节点 '{node_name}' 输出: {node_output}")
 
                     if node_name == "supervisor":
-                        # 提取路由决策并发送
                         routing_list = node_output.get("routing", [])
                         if routing_list:
                             routing = routing_list[-1]
@@ -194,26 +192,20 @@ class MultiAgentService:
                             }
 
                     elif node_name in ["log_analyzer", "monitor_expert", "knowledge_retriever"]:
-                        # Specialist 执行结果
                         yield {
                             "type": "specialist_result",
                             "name": node_name,
                             "result": node_output,
                         }
 
-                    elif node_name == "aggregator":
-                        # aggregator 完成
-                        pass
-
-            # 从最终状态获取报告（修复：initial_state 不会被 astream 修改）
-            final_state = self.graph.get_state(config)
+            final_state = await graph.aget_state(config_dict)
             final_report = ""
             if final_state and final_state.values:
                 final_report = final_state.values.get("final_report", "")
-            
+
             if not final_report:
                 final_report = await self._generate_final_report(initial_state)
-            
+
             yield {
                 "type": "complete",
                 "report": final_report,
@@ -229,26 +221,132 @@ class MultiAgentService:
             }
 
     async def _generate_final_report(self, state: MultiAgentState) -> str:
-        """
-        生成最终报告：优先简单拼接，失败时降级为 LLM 生成（P0 优化）
-        
-        优化前：调用 LLM 生成报告，耗时 ~41s
-        优化后：简单字符串拼接，耗时 ~0s
-        
-        仅当拼接结果为空时，才调用 LLM 作为 fallback。
+        """用 LLM 综合所有 Specialist 的结果，生成交叉分析报告
+
+        旧版是字符串拼接（"## 日志分析\\n" + log_summary），
+        新版让 LLM 做跨专家关联推理（比如"CPU高 + 日志有OOM → 内存泄漏"）。
+        LLM 调用失败时降级为拼接，保证可用性。
         """
         log_analysis = state.get("log_analysis") or {}
         monitor_metrics = state.get("monitor_metrics") or {}
         knowledge_context = state.get("knowledge_context") or ""
-        
+
         log_summary = log_analysis.get("summary", "") or "无日志分析结果"
         monitor_summary = monitor_metrics.get("summary", "") or "无监控分析结果"
-        
+        user_input = state.get("user_input", "")
+
+        # 先尝试 LLM 综合分析
+        try:
+            report = await self._generate_report_with_llm(
+                user_input, log_summary, monitor_summary, knowledge_context
+            )
+            if report and report.strip():
+                return report
+        except Exception as e:
+            logger.warning(f"LLM 综合分析失败，降级为拼接: {e}")
+
+        # 降级：字符串拼接
+        return self._fallback_report(log_summary, monitor_summary, knowledge_context)
+
+    async def _generate_report_with_llm(
+        self,
+        user_input: str,
+        log_summary: str,
+        monitor_summary: str,
+        knowledge_context: str,
+    ) -> str:
+        """LLM 综合分析：跨专家关联推理 + 最终报告"""
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", dedent("""\
+                你是 AIOps 系统的诊断报告综合分析专家。
+
+                你会收到多个 Specialist（专家）的分析结果，包括：
+                - 日志分析专家的结论
+                - 监控指标分析专家的结论
+                - 知识库检索到的运维经验
+
+                ## 你的任务
+                1. 综合所有专家的分析结果，做**跨领域关联推理**
+                   - 例如：日志发现 OOM + 监控发现内存持续上升 → 判断为内存泄漏
+                   - 例如：日志发现 timeout + 监控发现 CPU 飙高 → 判断为 CPU 饱和导致超时
+                2. 生成一份结构化的 Markdown 诊断报告
+
+                ## 报告结构（必须包含）
+                - ## 诊断概述：一句话总结系统当前状态
+                - ## 交叉分析：各专家发现的关联性分析（这是核心，不要简单罗列）
+                - ## 根因判断：基于交叉分析推断的最可能根因
+                - ## 处置建议：具体的修复/排查建议
+                - ## 后续监控：建议持续关注的关键指标
+
+                ## 注意事项
+                - 只基于专家提供的真实数据做分析，不要编造
+                - 如果某个专家无数据，在对应位置说明"证据不足"
+                - 报告简洁专业，避免冗长
+            """).strip()),
+            ("human", dedent("""\
+                ## 用户原始问题
+                {user_input}
+
+                ## 日志分析专家结论
+                {log_summary}
+
+                ## 监控指标分析专家结论
+                {monitor_summary}
+
+                ## 知识库参考
+                {knowledge_context}
+
+                请综合以上所有分析结果，做跨专家关联分析并生成诊断报告。
+            """).strip()),
+        ])
+
+        llm = ChatQwen(
+            model=config.rag_model,
+            api_key=config.dashscope_api_key,
+            temperature=0,
+        )
+
+        messages = prompt.format_messages(
+            user_input=user_input[:500],
+            log_summary=log_summary[:2000],
+            monitor_summary=monitor_summary[:2000],
+            knowledge_context=knowledge_context[:1000]
+            if knowledge_context else "无相关知识库文档",
+        )
+
+        response = await llm.ainvoke(messages)
+        report = response.content if hasattr(response, "content") else str(response)
+        logger.info(f"LLM 综合分析报告生成完成，长度: {len(report)} 字符")
+        # === 新增：保存诊断结果到 Mem0 ===
+        try:
+            save_memory(
+                messages=[
+                    {"role": "user", "content": user_input[:1000]},
+                    {"role": "assistant",
+                     "content": f"【日志分析】{log_summary[:500]}\n【监控分析】{monitor_summary[:500]}"},
+                ],
+                metadata={
+                    "type": "multi_agent_diagnosis",
+                    "log_summary_len": len(log_summary),
+                    "monitor_summary_len": len(monitor_summary),
+                    "has_knowledge": bool(knowledge_context),
+                },
+            )
+        except Exception as e:
+            logger.warning(f"保存到 Mem0 失败（不影响主流程）: {e}")
+        # === 结束 ===
+
+        return report
+
+    def _fallback_report(
+        self,
+        log_summary: str,
+        monitor_summary: str,
+        knowledge_context: str,
+    ) -> str:
+        """降级方案：LLM 不可用时用字符串拼接"""
         lines = [
             "# AIOps 诊断报告",
-            "",
-            "## 概述",
-            f"本报告基于 {len(state.get('completed_tasks', []))} 个 Specialist 的分析结果生成。",
             "",
             "## 日志分析结论",
             log_summary,
@@ -257,89 +355,15 @@ class MultiAgentService:
             monitor_summary,
             "",
         ]
-        
         if knowledge_context:
             lines.extend([
                 "## 相关知识库",
-                knowledge_context[:1000] + "..." if len(knowledge_context) > 1000 else knowledge_context,
+                knowledge_context[:1000] + "..."
+                if len(knowledge_context) > 1000 else knowledge_context,
                 "",
             ])
-        
-        lines.extend([
-            "## 综合建议",
-            "以上为各 Specialist 的分析结果，请根据实际情况进行处理。",
-            "",
-        ])
-        
-        report = "\n".join(lines)
-        
-        # Fallback：如果拼接结果异常，使用 LLM 生成
-        if not report.strip() or report.strip() == "# AIOps 诊断报告":
-            logger.warning("拼接报告为空，降级使用 LLM 生成")
-            return await self._generate_report_with_llm(state)
-        
-        return report
-
-    async def _generate_report_with_llm(self, state: MultiAgentState) -> str:
-        """
-        使用 LLM 生成报告（仅作为 fallback）
-        
-        保留原有逻辑，仅在简单拼接失败时调用。
-        预期极少触发，仅在 Specialist 全部失败时使用。
-        """
-        from langchain_core.prompts import ChatPromptTemplate
-        from textwrap import dedent
-        
-        log_analysis = state.get("log_analysis") or {}
-        monitor_metrics = state.get("monitor_metrics") or {}
-        knowledge_context = state.get("knowledge_context") or ""
-        
-        log_summary = log_analysis.get("summary", "无日志分析结果")
-        monitor_summary = monitor_metrics.get("summary", "无监控分析结果")
-        
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", dedent("""\
-                你是 AIOps 系统的报告生成专家。
-                请基于以下 Specialist 的分析结果，生成一份结构清晰、重点突出的诊断报告。
-                
-                ## 报告要求
-                1. 使用 Markdown 格式
-                2. 包含：概述、日志分析结论、监控指标分析、相关知识库、综合结论与建议
-                3. 重点突出异常和建议措施
-                4. 语气专业、简洁
-            """).strip()),
-            ("human", dedent("""\
-                请基于以下分析结果生成诊断报告：
-                
-                ### 日志分析结果
-                {log_summary}
-                
-                ### 监控指标分析
-                {monitor_summary}
-                
-                ### 知识库参考
-                {knowledge_context}
-                
-                请生成完整的诊断报告。
-            """).strip()),
-        ])
-        
-        try:
-            messages = prompt.format_messages(
-                log_summary=log_summary[:2000],
-                monitor_summary=monitor_summary[:2000],
-                knowledge_context=knowledge_context[:1000] if knowledge_context else "无相关知识库文档",
-            )
-            
-            response = await self.log_analyzer.llm.ainvoke(messages)
-            report = response.content if hasattr(response, "content") else str(response)
-            logger.info(f"LLM 生成最终报告，长度: {len(report)} 字符")
-            return report
-            
-        except Exception as e:
-            logger.error(f"LLM 生成报告失败: {e}")
-            # 最终降级：极简拼接
-            return f"# AIOps 诊断报告\n\n## 日志分析\n{log_summary}\n\n## 监控指标\n{monitor_summary}\n"
+        lines.extend(["## 综合建议", "以上为各 Specialist 的分析结果，请根据实际情况处理。"])
+        return "\n".join(lines)
 
 
 # 全局单例

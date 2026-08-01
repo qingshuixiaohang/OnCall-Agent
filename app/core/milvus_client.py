@@ -14,6 +14,28 @@ from pymilvus import (
 
 from app.config import config
 
+# ============================================================
+# Monkey Patch: 抑制 AsyncMilvusClient 在同步阶段的报错
+# ============================================================
+# pymilvus 2.5.x 的 MilvusClient 初始化时会自动创建 AsyncMilvusClient
+# 作为内部备用，但在同步代码（无 event loop）中会报错：
+#   "Cannot create async connection: no running event loop"
+# 此 patch 让 AsyncMilvusClient 在无 event loop 时静默跳过，不影响同步功能。
+try:
+    from pymilvus.milvus_client.async_milvus_client import AsyncMilvusClient as _AsyncMilvusClient
+    _orig_async_init = _AsyncMilvusClient.__init__
+    def _patched_async_init(self, *args, **kwargs):
+        try:
+            import asyncio
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # 同步环境，无 event loop，静默跳过
+            return
+        return _orig_async_init(self, *args, **kwargs)
+    _AsyncMilvusClient.__init__ = _patched_async_init
+except Exception:
+    pass  # 如果 AsyncMilvusClient 不存在或 patch 失败，忽略
+
 
 def _patch_pymilvus_milvus_client_orm_alias() -> None:
     """
@@ -53,23 +75,21 @@ class MilvusClientManager:
 
     def __init__(self) -> None:
         """初始化 Milvus 客户端管理器"""
-        self._client: MilvusClient | None = None
         self._collection: Collection | None = None
 
-    def connect(self) -> MilvusClient:
+    def connect(self) -> None:
         """
         连接到 Milvus 服务器并初始化 collection
 
         Returns:
-            MilvusClient: Milvus 客户端实例
+            None
 
         Raises:
             RuntimeError: 连接或初始化失败时抛出
         """
         # 幂等：导入阶段可能已由 VectorStoreManager 等提前连接，避免重复初始化
-        if self._collection is not None and self._client is not None:
+        if self._collection is not None:
             logger.debug("Milvus 已连接，跳过重复 connect")
-            return self._client
 
         try:
             _patch_pymilvus_milvus_client_orm_alias()
@@ -84,9 +104,9 @@ class MilvusClientManager:
                 timeout=config.milvus_timeout / 1000,  # 转换为秒
             )
 
-            # 创建客户端
-            uri = f"http://{config.milvus_host}:{config.milvus_port}"
-            self._client = MilvusClient(uri=uri)
+            # 已建立 ORM 连接（connections.connect），无需额外创建 MilvusClient
+
+
 
             logger.info("成功连接到 Milvus")
 
@@ -125,7 +145,6 @@ class MilvusClientManager:
             # 加载 collection
             self._load_collection()
 
-            return self._client
 
         except MilvusException as e:
             logger.error(f"Milvus 操作失败: {e}")
@@ -176,7 +195,7 @@ class MilvusClientManager:
         schema = CollectionSchema(
             fields=fields,
             description="Business knowledge collection",
-            enable_dynamic_field=False,
+            enable_dynamic_field=True,
         )
 
         # 创建 collection
@@ -243,7 +262,7 @@ class MilvusClientManager:
         获取 collection 实例
 
         Returns:
-            Collection: collection 实例
+            None
 
         Raises:
             RuntimeError: collection 未初始化时抛出
@@ -257,11 +276,9 @@ class MilvusClientManager:
         健康检查
 
         Returns:
-            bool: True 表示健康，False 表示异常
+            None
         """
         try:
-            if self._client is None:
-                return False
 
             # 尝试列出 connections
             _ = connections.list_connections()
@@ -291,7 +308,6 @@ class MilvusClientManager:
         except Exception as e:
             errors.append(f"断开连接失败: {e}")
 
-        self._client = None
         
         if errors:
             error_msg = "; ".join(errors)

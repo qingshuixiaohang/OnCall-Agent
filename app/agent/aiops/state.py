@@ -22,3 +22,6 @@ class PlanExecuteState(TypedDict):
     
     # 最终响应/报告
     response: str
+
+    # 最近一次工具调用元信息（name/args/result），供前端渲染工具卡片
+    last_tool_call: dict

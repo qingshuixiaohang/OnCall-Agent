@@ -1,0 +1,22 @@
+const { chromium } = require("playwright");
+(async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  const errs = [];
+  const consoleMsgs = [];
+  page.on("console", m => consoleMsgs.push(`[${m.type()}] ${m.text()}`));
+  page.on("pageerror", e => errs.push(`PAGEERROR: ${e.message}\n${e.stack}`));
+  page.on("requestfailed", r => errs.push(`REQFAIL: ${r.url()} ${r.failure()?.errorText}`));
+  await page.goto("http://localhost:5173/", { waitUntil: "networkidle", timeout: 15000 }).catch(e => console.log("GOTO ERR", e.message));
+  await page.waitForTimeout(2000);
+  const bodyText = await page.evaluate(() => document.body.innerText).catch(e => "EVAL ERR " + e.message);
+  const rootHTML = await page.evaluate(() => document.getElementById("root")?.innerHTML?.length || 0).catch(e => "EVAL ERR " + e.message);
+  console.log("=== CONSOLE ===");
+  consoleMsgs.forEach(m => console.log(m));
+  console.log("=== ERRORS ===");
+  errs.forEach(e => console.log(e));
+  console.log("=== BODY TEXT ===");
+  console.log(bodyText.slice(0, 300));
+  console.log("=== ROOT HTML LEN ===", rootHTML);
+  await browser.close();
+})();
