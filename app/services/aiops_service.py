@@ -11,12 +11,13 @@
 """
 
 from typing import AsyncGenerator, Dict, Any
+from uuid import uuid4
 from langgraph.graph import StateGraph, END
 from loguru import logger
 
 from app.agent.aiops import PlanExecuteState, planner, executor, replanner
 from app.core.checkpointer import get_checkpointer, thread_id_with_prefix
-from app.core.mem0_manager import search_memory, save_memory
+from app.core.mem0_manager import asearch_memory, schedule_memory_save
 
 
 # 节点名称常量
@@ -87,7 +88,9 @@ class AIOpsService:
     async def execute(
         self,
         user_input: str,
-        session_id: str = "default"
+        session_id: str = "default",
+        run_id: str | None = None,
+        resume: bool = False,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """执行 Plan-Execute-Replan 流程（统一 checkpointer 持久化）
 
@@ -99,11 +102,14 @@ class AIOpsService:
             Dict[str, Any]: 流式事件
         """
         graph = await self._get_graph()
-        thread_id = thread_id_with_prefix(session_id, "aiops")
+        if resume and not run_id:
+            raise ValueError("resume=true 时必须提供 run_id")
+        run_id = run_id or uuid4().hex
+        thread_id = thread_id_with_prefix(f"{session_id}-{run_id}", "aiops")
         config_dict = {"configurable": {"thread_id": thread_id}}
 
         # === Mem0 记忆注入 ===
-        memory_context = search_memory(query=user_input, limit=3)
+        memory_context = await asearch_memory(query=user_input, limit=3)
         augmented_input = user_input
         if memory_context:
             augmented_input = f"{user_input}\n\n{memory_context}"
@@ -113,25 +119,24 @@ class AIOpsService:
         logger.info(f"[会话 {session_id}] 开始执行任务: {user_input}")
 
         try:
-            # 从 checkpointer 恢复历史状态
-            snapshot = await graph.aget_state(config_dict)
-            if snapshot and snapshot.values:
+            if resume:
+                snapshot = await graph.aget_state(config_dict)
+                if not snapshot or not snapshot.values:
+                    raise ValueError(f"找不到可恢复的诊断运行: {run_id}")
                 initial_state = dict(snapshot.values)
                 initial_state["input"] = augmented_input
-                # 清空旧响应，让 replanner 重新评估（新任务可能不同）
                 initial_state["response"] = ""
-                logger.info(
-                    f"[会话 {session_id}] 从 checkpoint 恢复状态，"
-                    f"past_steps: {len(initial_state.get('past_steps', []))} 条"
-                )
+                logger.info(f"[会话 {session_id}] 恢复诊断运行: {run_id}")
             else:
+                # 新问题不复用旧 plan/past_steps，避免不同诊断任务互相污染。
                 initial_state: PlanExecuteState = {
                     "input": augmented_input,
                     "plan": [],
                     "past_steps": [],
-                    "response": ""
+                    "response": "",
+                    "last_tool_call": {},
                 }
-                logger.info(f"[会话 {session_id}] 无历史状态，全新执行")
+                logger.info(f"[会话 {session_id}] 新建诊断运行: {run_id}")
 
             async for event in graph.astream(
                 input=initial_state,
@@ -142,11 +147,17 @@ class AIOpsService:
                     logger.info(f"节点 '{node_name}' 输出事件")
 
                     if node_name == NODE_PLANNER:
-                        yield self._format_planner_event(node_output)
+                        event_output = self._format_planner_event(node_output)
+                        event_output["run_id"] = run_id
+                        yield event_output
                     elif node_name == NODE_EXECUTOR:
-                        yield self._format_executor_event(node_output)
+                        event_output = self._format_executor_event(node_output)
+                        event_output["run_id"] = run_id
+                        yield event_output
                     elif node_name == NODE_REPLANNER:
-                        yield self._format_replanner_event(node_output)
+                        event_output = self._format_replanner_event(node_output)
+                        event_output["run_id"] = run_id
+                        yield event_output
 
             # 获取最终状态（LangGraph 已自动持久化 checkpoint）
             final_state = await graph.aget_state(config_dict)
@@ -157,7 +168,7 @@ class AIOpsService:
             # === 保存 AIOps 诊断结果到 Mem0 ===
             try:
                 if final_response.strip():
-                    save_memory(
+                    schedule_memory_save(
                         messages=[
                             {"role": "user", "content": user_input[:1000]},
                             {"role": "assistant", "content": final_response[:2000]},
@@ -165,30 +176,43 @@ class AIOpsService:
                         metadata={"type": "aiops_diagnosis", "session_id": session_id},
                     )
             except Exception as e:
-                logger.warning(f"[会话 {session_id}] 保存 AIOps 记忆失败（不影响主流程）: {e}")
+                logger.warning(
+                    "[会话 {}] 保存 AIOps 记忆失败（不影响主流程）: {}",
+                    session_id,
+                    e,
+                )
             # === 结束 ===
 
             yield {
                 "type": "complete",
                 "stage": "complete",
                 "message": "任务执行完成",
-                "response": final_response
+                "response": final_response,
+                "run_id": run_id,
             }
 
             logger.info(f"[会话 {session_id}] 任务执行完成")
 
         except Exception as e:
-            logger.error(f"[会话 {session_id}] 任务执行失败: {e}", exc_info=True)
+            logger.error(
+                "[会话 {}] 任务执行失败: {}",
+                session_id,
+                e,
+                exc_info=True,
+            )
             yield {
                 "type": "error",
                 "stage": "error",
-                "message": f"任务执行出错: {str(e)}"
+                "message": f"任务执行出错: {str(e)}",
+                "run_id": run_id,
             }
 
     async def diagnose(
         self,
         session_id: str = "default",
-        user_input: str | None = None
+        user_input: str | None = None,
+        run_id: str | None = None,
+        resume: bool = False,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """AIOps 诊断接口（支持自然语言自定义输入）"""
         from textwrap import dedent
@@ -221,7 +245,12 @@ class AIOpsService:
 - 如果某个步骤失败，在结论中如实说明，不要跳过
 - 工具名称必须使用系统提供的精确名称（如 search_log 而不是 query_logs）""")
 
-        async for event in self.execute(aiops_task, session_id):
+        async for event in self.execute(
+            aiops_task,
+            session_id,
+            run_id=run_id,
+            resume=resume,
+        ):
             if event.get("type") == "complete":
                 yield {
                     "type": "complete",
@@ -230,10 +259,65 @@ class AIOpsService:
                     "diagnosis": {
                         "status": "completed",
                         "report": event.get("response", "")
-                    }
+                    },
+                    "run_id": event.get("run_id"),
                 }
             else:
                 yield event
+
+    async def get_history(self, session_id: str, run_id: str) -> Dict[str, Any] | None:
+        """从 Checkpointer 重建单 Agent 诊断时间线。"""
+        graph = await self._get_graph()
+        thread_id = thread_id_with_prefix(f"{session_id}-{run_id}", "aiops")
+        config_dict = {"configurable": {"thread_id": thread_id}}
+
+        snapshots = []
+        async for snapshot in graph.aget_state_history(config_dict):
+            snapshots.append(snapshot)
+        if not snapshots:
+            return None
+
+        events: list[Dict[str, Any]] = []
+        seen_plans = set()
+        processed_steps = 0
+        response = ""
+        question = ""
+
+        for snapshot in reversed(snapshots):
+            state = snapshot.values or {}
+            question = question or state.get("input", "")
+            plan = state.get("plan", []) or []
+            plan_key = tuple(plan)
+            if plan and plan_key not in seen_plans:
+                events.append({"type": "plan", "plan": list(plan)})
+                seen_plans.add(plan_key)
+
+            past_steps = state.get("past_steps", []) or []
+            if len(past_steps) > processed_steps:
+                for step, result in past_steps[processed_steps:]:
+                    events.append({
+                        "type": "step_complete",
+                        "current_step": step,
+                        "message": "步骤执行完成",
+                        "remaining_steps": max(len(plan), 0),
+                        "tool_call": state.get("last_tool_call") or {},
+                    })
+                processed_steps = len(past_steps)
+
+            if state.get("response"):
+                response = state["response"]
+
+        if response:
+            events.append({"type": "report", "report": response})
+            events.append({"type": "complete", "response": response})
+
+        return {
+            "mode": "aiops",
+            "session_id": session_id,
+            "run_id": run_id,
+            "question": question,
+            "events": events,
+        }
 
     # ------------------------------------------------------------------
     # 事件格式化

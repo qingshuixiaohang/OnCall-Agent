@@ -130,7 +130,7 @@ async def planner(state: PlanExecuteState) -> Dict[str, Any]:
             else:
                 logger.info("未找到相关经验文档")
         except Exception as e:
-            logger.warning(f"查询内部文档失败: {e}")
+            logger.warning("查询内部文档失败: {}", e)
 
         # 步骤2: 获取可用工具列表
         # 获取本地工具
@@ -199,7 +199,7 @@ async def planner(state: PlanExecuteState) -> Dict[str, Any]:
         return {"plan": plan_steps}
 
     except Exception as e:
-        logger.error(f"生成计划失败: {e}", exc_info=True)
+        logger.error("生成计划失败: {}", e, exc_info=True)
         # 返回一个默认计划
         return {
             "plan": [

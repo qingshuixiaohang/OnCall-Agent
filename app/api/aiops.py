@@ -88,7 +88,9 @@ async def diagnose_stream(request: AIOpsRequest):
         try:
             async for event in aiops_service.diagnose(
                 session_id=session_id,
-                user_input=user_question
+                user_input=user_question,
+                run_id=request.run_id,
+                resume=request.resume,
             ):
                 # 发送事件
                 yield {

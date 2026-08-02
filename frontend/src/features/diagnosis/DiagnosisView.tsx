@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { Play } from "lucide-react";
-import { aiopsDiagnose, multiAgentDiagnose } from "../../lib/api";
+import { aiopsDiagnose, getDiagnosisHistory, multiAgentDiagnose } from "../../lib/api";
 import { useStore } from "../../store";
 import type { AIOpsEvent, MultiAgentEvent } from "../../lib/types";
 import { PhaseProgress, ProgressBar } from "./PhaseProgress";
@@ -35,13 +35,14 @@ interface Props {
 }
 
 export const DiagnosisView = forwardRef<DiagnosisHandle, Props>(({ kind, onStart }, ref) => {
-  const { sessionId, isStreaming, setStreaming } = useStore();
+  const { sessionId, runId, isStreaming, setRunId, setStreaming } = useStore();
   const [items, setItems] = useState<Item[]>([]);
   const [phase, setPhase] = useState("planner");
   const [pct, setPct] = useState(0);
   const [pctLabel, setPctLabel] = useState("");
   const [done, setDone] = useState(false);
   const [started, setStarted] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -49,6 +50,66 @@ export const DiagnosisView = forwardRef<DiagnosisHandle, Props>(({ kind, onStart
   }, [items, pct]);
 
   const push = (it: Item) => setItems((prev) => [...prev, it]);
+
+  useEffect(() => {
+    if (isStreaming || !runId) return;
+
+    const controller = new AbortController();
+    let active = true;
+    setStarted(true);
+    setDone(false);
+    setItems([]);
+    setLoadingHistory(true);
+
+    getDiagnosisHistory(sessionId, kind, runId, controller.signal)
+      .then((history) => {
+        if (!active || !history) return;
+        for (const event of history.events) {
+          if (kind === "aiops") {
+            const ev = event as AIOpsEvent;
+            if (ev.type === "plan") {
+              push({ kind: "plan", plan: ev.plan || [] });
+            } else if (ev.type === "step_complete") {
+              push({
+                kind: "step",
+                index: 0,
+                step: ev.current_step || ev.message,
+                toolCall: ev.tool_call,
+              });
+            } else if (ev.type === "report") {
+              push({ kind: "report", report: ev.report });
+            }
+          } else {
+            const ev = event as MultiAgentEvent;
+            if (ev.type === "routing") {
+              push({ kind: "routing", reason: ev.reason, specialists: ev.specialists });
+            } else if (ev.type === "specialist_result") {
+              push({ kind: "specialist", name: ev.name, result: ev.result });
+            } else if (ev.type === "complete") {
+              push({ kind: "report", report: ev.report });
+            }
+          }
+        }
+        setPhase("complete");
+        setPct(100);
+        setPctLabel("已恢复");
+        setDone(true);
+      })
+      .catch((error) => {
+        if (error?.name !== "AbortError" && active) {
+          push({ kind: "error", message: `历史加载失败: ${error.message}` });
+          setDone(true);
+        }
+      })
+      .finally(() => {
+        if (active) setLoadingHistory(false);
+      });
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [sessionId, runId, kind]);
 
   function reset() {
     setItems([]);
@@ -67,6 +128,7 @@ export const DiagnosisView = forwardRef<DiagnosisHandle, Props>(({ kind, onStart
       text,
       {
         onEvent: (ev: AIOpsEvent) => {
+          if (ev.run_id) setRunId(ev.run_id);
           switch (ev.type) {
             case "plan":
               planLen = ev.plan.length;
@@ -135,6 +197,7 @@ export const DiagnosisView = forwardRef<DiagnosisHandle, Props>(({ kind, onStart
       text,
       {
         onEvent: (ev: MultiAgentEvent) => {
+          if (ev.run_id) setRunId(ev.run_id);
           switch (ev.type) {
             case "routing":
               specTotal = ev.specialists.length;
@@ -218,10 +281,10 @@ export const DiagnosisView = forwardRef<DiagnosisHandle, Props>(({ kind, onStart
               <div className="text-xs text-oncall-muted">也可以在下方输入具体问题后发送</div>
             </div>
           )}
-          {started && items.length === 0 && isStreaming && (
+          {started && items.length === 0 && (isStreaming || loadingHistory) && (
             <div className="flex flex-col items-center justify-center gap-2 py-20 text-oncall-muted">
               <div className="h-6 w-6 animate-spin rounded-full border-2 border-oncall-accent border-t-transparent" />
-              <div className="text-sm">正在分析...</div>
+              <div className="text-sm">{loadingHistory ? "正在加载诊断历史..." : "正在分析..."}</div>
             </div>
           )}
           {items.map((it, i) => {

@@ -88,7 +88,7 @@ class MonitorExpert(BaseSpecialist):
         logger.info(f"[{self.name}] 可用工具: {[t.name for t in tools]}")
 
         # 把用户输入交给 LLM，让它自主选工具、传参数、做分析
-        analysis_text = await self.run_with_tools(
+        analysis_text, tool_traces = await self.run_with_tools(
             task=user_input,
             tools=tools,
             system_prompt=MONITOR_SYSTEM_PROMPT,
@@ -101,6 +101,7 @@ class MonitorExpert(BaseSpecialist):
                 "memory": [],
                 "anomalies": [],
                 "summary": analysis_text,
+                "tool_calls": tool_traces,
             },
             "completed_tasks": [f"完成 {self.name} 分析"],
         }

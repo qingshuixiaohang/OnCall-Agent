@@ -16,7 +16,7 @@ class MultiAgentState(TypedDict):
     """Multi-Agent 共享状态
 
     数据流：
-    用户输入 -> Supervisor 路由 -> Specialist 子图执行 -> 结果汇总 -> 最终报告
+    用户输入 -> Supervisor 路由 -> Specialist 并行执行 -> 结果汇总 -> 最终报告
     """
 
     # ========== 输入层 ==========
@@ -25,6 +25,9 @@ class MultiAgentState(TypedDict):
 
     user_input: str
     """用户原始输入（任务描述）"""
+
+    specialist_task: Optional[str]
+    """Supervisor 为当前 Specialist 分配的具体任务"""
 
     # ========== 路由层 ==========
     routing: Annotated[List[Dict[str, Any]], operator.add]

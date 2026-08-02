@@ -19,7 +19,7 @@ from loguru import logger
 
 from app.config import config
 from app.agent.multi_agent.state import MultiAgentState
-from app.core.mem0_manager import search_memory
+from app.core.mem0_manager import asearch_memory
 
 
 class BaseSpecialist(ABC):
@@ -57,16 +57,18 @@ class BaseSpecialist(ABC):
 
         try:
             # === Mem0 记忆注入：在 _execute 之前把历史经验塞进 user_input ===
-            user_input = state.get("user_input", "")
+            user_input = state.get("specialist_task") or state.get("user_input", "")
+            working_state = dict(state)
+            working_state["user_input"] = user_input
             if user_input:
-                memory_context = search_memory(query=user_input, limit=3)
+                memory_context = await asearch_memory(query=user_input, limit=3)
                 if memory_context:
-                    state["user_input"] = f"{user_input}\n\n{memory_context}"
+                    working_state["user_input"] = f"{user_input}\n\n{memory_context}"
                     logger.info(
                         f"[{self.name}] 注入 {len(memory_context)} 字记忆上下文"
                     )
 
-            result = await self._execute(state)
+            result = await self._execute(working_state)
             result.setdefault("specialist_name", self.name)
             result.setdefault("status", "success")
             logger.info(f"=== {self.name} 执行完成 ===")
@@ -86,7 +88,7 @@ class BaseSpecialist(ABC):
         tools: List[BaseTool],
         system_prompt: str,
         max_steps: int = 2,
-    ) -> str:
+    ) -> tuple[str, List[Dict[str, Any]]]:
         """有界 ReAct 循环：让 LLM 自主选工具并执行
 
         这是一个通用的工具调用辅助方法，Specialist 不再硬编码调哪个工具，
@@ -104,7 +106,7 @@ class BaseSpecialist(ABC):
             max_steps: 最大工具调用轮次（默认 2）
 
         Returns:
-            LLM 基于工具结果生成的分析文本
+            LLM 分析文本，以及供前端结构化渲染的工具调用轨迹
         """
         llm_with_tools = self.llm.bind_tools(tools)
         tool_node = ToolNode(tools)
@@ -113,13 +115,17 @@ class BaseSpecialist(ABC):
             SystemMessage(content=system_prompt),
             HumanMessage(content=task),
         ]
+        tool_traces: List[Dict[str, Any]] = []
 
         for step in range(max_steps):
             response = await llm_with_tools.ainvoke(messages)
 
             if not hasattr(response, "tool_calls") or not response.tool_calls:
                 # LLM 认为不需要工具，直接返回分析
-                return response.content if hasattr(response, "content") else str(response)
+                return (
+                    response.content if hasattr(response, "content") else str(response),
+                    tool_traces,
+                )
 
             # LLM 选择了工具 → 执行
             for tc in response.tool_calls:
@@ -128,6 +134,20 @@ class BaseSpecialist(ABC):
             messages.append(response)
             tool_messages = await tool_node.ainvoke({"messages": messages})
             messages.extend(tool_messages["messages"])
+
+            for tool_call, tool_message in zip(
+                response.tool_calls, tool_messages["messages"]
+            ):
+                raw_result = getattr(tool_message, "content", "")
+                try:
+                    parsed_result = json.loads(raw_result) if isinstance(raw_result, str) else raw_result
+                except (json.JSONDecodeError, TypeError):
+                    parsed_result = raw_result
+                tool_traces.append({
+                    "name": tool_call["name"],
+                    "args": tool_call.get("args", {}),
+                    "result": parsed_result,
+                })
 
             # 检查工具结果中是否有错误
             for msg in tool_messages["messages"]:
@@ -142,7 +162,10 @@ class BaseSpecialist(ABC):
         # 达到 max_steps 后，让 LLM 基于已收集的数据做最终分析
         logger.info(f"[{self.name}] 工具调用达到上限({max_steps})，生成最终分析")
         final_response = await self.llm.ainvoke(messages)
-        return final_response.content if hasattr(final_response, "content") else str(final_response)
+        return (
+            final_response.content if hasattr(final_response, "content") else str(final_response),
+            tool_traces,
+        )
 
     async def get_tools_by_names(
         self,

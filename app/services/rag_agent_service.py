@@ -33,7 +33,7 @@ from app.config import config
 from app.tools import get_current_time, retrieve_knowledge
 from app.agent.mcp_client import get_mcp_client_with_retry
 from app.core.checkpointer import get_checkpointer, thread_id_with_prefix
-from app.core.mem0_manager import search_memory, save_memory
+from app.core.mem0_manager import asearch_memory, schedule_memory_save
 
 
 class AgentState(TypedDict):
@@ -409,7 +409,7 @@ class RagAgentService:
         logger.info(f"[会话 {session_id}] RAG 查询（非流式）: {question}")
 
         # === Mem0 记忆注入 ===
-        memory_context = search_memory(query=question, limit=3)
+        memory_context = await asearch_memory(query=question, limit=3)
         augmented_question = question
         if memory_context:
             augmented_question = f"{question}\n\n{memory_context}"
@@ -434,7 +434,7 @@ class RagAgentService:
                 # === 保存本轮 RAG 对话到 Mem0 ===
                 try:
                     if answer and answer.strip():
-                        save_memory(
+                        schedule_memory_save(
                             messages=[
                                 {"role": "user", "content": question[:1000]},
                                 {"role": "assistant", "content": answer.strip()[:2000]},
@@ -463,7 +463,7 @@ class RagAgentService:
         logger.info(f"[会话 {session_id}] RAG 查询（流式）: {question}")
 
         # === Mem0 记忆注入 ===
-        memory_context = search_memory(query=question, limit=3)
+        memory_context = await asearch_memory(query=question, limit=3)
         augmented_question = question
         if memory_context:
             augmented_question = f"{question}\n\n{memory_context}"
@@ -554,7 +554,7 @@ class RagAgentService:
             try:
                 assistant_response = "".join(assistant_response_parts)
                 if assistant_response.strip():
-                    save_memory(
+                    schedule_memory_save(
                         messages=[
                             {"role": "user", "content": question[:1000]},
                             {"role": "assistant", "content": assistant_response[:2000]},
@@ -565,7 +565,10 @@ class RagAgentService:
                 logger.warning(f"[会话 {session_id}] 保存 RAG 记忆失败（不影响主流程）: {e}")
             # === 结束 ===
 
-            yield {"type": "complete"}
+            yield {
+                "type": "complete",
+                "data": {"answer": assistant_response},
+            }
 
         except Exception as e:
             logger.error(f"[会话 {session_id}] RAG 流式查询失败: {e}")

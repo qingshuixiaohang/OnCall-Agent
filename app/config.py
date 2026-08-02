@@ -5,6 +5,7 @@
 
 from pathlib import Path
 from typing import Dict, Any
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,10 +29,10 @@ class Settings(BaseSettings):
     debug: bool = False
     host: str = "0.0.0.0"
     port: int = 9900
+    cors_origins: str = "http://localhost:5173,http://localhost:9900"
 
-    # DashScope 配置（对话模型）
+    # DashScope 配置（API Key；模型统一由 rag_model 配置）
     dashscope_api_key: str = ""  # 默认空字符串，实际使用需从环境变量加载
-    dashscope_model: str = "qwen3.7-plus"
 
     # SiliconFlow 配置（嵌入向量模型）
     siliconflow_api_key: str = ""
@@ -45,7 +46,11 @@ class Settings(BaseSettings):
 
     # RAG 配置
     rag_top_k: int = 3
-    rag_model: str = "qwen3.7-plus"  # 使用快速响应模型，不带扩展思考
+    rag_model: str = Field(
+        default="qwen3.7-plus",
+        validation_alias=AliasChoices("RAG_MODEL", "DASHSCOPE_MODEL"),
+        description="所有 DashScope 对话调用共用的模型名称",
+    )
 
     # 重排模型配置
     rerank_backend: str = "siliconflow"  # 重排后端：siliconflow（免费）或 dashscope（阿里云百炼）
@@ -66,6 +71,11 @@ class Settings(BaseSettings):
     context_max_tokens: int = 32768  # 模型上下文窗口大小（qwen-max = 32K）
     context_compression_threshold: float = 0.7  # 压缩触发阈值（70% 时触发）
     context_keep_recent: int = 4  # 压缩后保留的最近消息条数
+
+    @property
+    def dashscope_model(self) -> str:
+        """兼容旧调用方；模型实际只由 rag_model 配置。"""
+        return self.rag_model
 
     # 记忆存储配置
     storage_backend: str = "sqlite"
@@ -97,6 +107,8 @@ class Settings(BaseSettings):
 class Mem0Config(BaseSettings):
     mem0_backend: str = "sqlite"  # sqlite | postgres | qdrant
     mem0_sqlite_path: str = "./volumes/mem0.db"
+    mem0_user_id: str = ""
+    mem0_save_timeout: float = 60.0
 
     model_config = {"env_prefix": ""}
 

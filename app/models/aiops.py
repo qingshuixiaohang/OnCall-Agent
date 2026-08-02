@@ -19,6 +19,16 @@ class AIOpsRequest(BaseModel):
         description="用户自定义的诊断问题（自然语言）。例如：'诊断 data-sync-service 的 CPU 过高问题'。如果不提供，将执行默认的全系统告警诊断"
     )
 
+    run_id: Optional[str] = Field(
+        default=None,
+        description="可选的诊断运行标识；未提供时由服务端生成",
+    )
+
+    resume: bool = Field(
+        default=False,
+        description="是否从指定 run_id 恢复未完成的诊断",
+    )
+
     class Config:
         json_schema_extra = {
             "example": {

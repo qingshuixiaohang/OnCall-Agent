@@ -74,7 +74,9 @@ async def diagnose_multi_stream(request: AIOpsRequest):
         try:
             async for event in multi_agent_service.execute(
                 user_input=user_question,
-                session_id=session_id
+                session_id=session_id,
+                run_id=request.run_id,
+                resume=request.resume,
             ):
                 yield {
                     "event": "message",

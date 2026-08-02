@@ -242,7 +242,7 @@ async def executor(state: PlanExecuteState) -> Dict[str, Any]:
         }
 
     except Exception as e:
-        logger.error(f"执行步骤失败: {e}", exc_info=True)
+        logger.error("执行步骤失败: {}", e, exc_info=True)
         return {
             "plan": plan[1:],
             "past_steps": [(task, f"执行异常: {str(e)}")],

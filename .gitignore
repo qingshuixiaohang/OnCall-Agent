@@ -50,6 +50,8 @@ mcp_servers/logs/
 # ========== 数据库 & 存储 ==========
 *.db
 *.sqlite
+*.sqlite-shm
+*.sqlite-wal
 volumes/
 uploads/
 *.tmp

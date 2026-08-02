@@ -156,7 +156,7 @@ async def replanner(state: PlanExecuteState) -> Dict[str, Any]:
         # 格式化工具描述
         tools_description = format_tools_description(all_tools)
     except Exception as e:
-        logger.warning(f"获取工具列表失败: {e}")
+        logger.warning("获取工具列表失败: {}", e)
         tools_description = "无法获取工具列表"
 
     # 创建 LLM
@@ -233,7 +233,7 @@ async def replanner(state: PlanExecuteState) -> Dict[str, Any]:
                 return {}  # 不修改状态，继续执行
 
         except Exception as e:
-            logger.error(f"重新规划失败: {e}, 继续执行剩余计划")
+            logger.error("重新规划失败: {}, 继续执行剩余计划", e)
             return {}
 
     else:
@@ -278,7 +278,7 @@ async def _generate_response(state: PlanExecuteState, llm: ChatQwen) -> Dict[str
         return {"response": final_response}
 
     except Exception as e:
-        logger.error(f"生成响应失败: {e}")
+        logger.error("生成响应失败: {}", e)
         # 生成简单的后备响应
         fallback_response = f"""# 任务执行结果
 

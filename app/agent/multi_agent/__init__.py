@@ -1,7 +1,7 @@
 """Multi-Agent 入口
 
 职责：
-1. 组装 Supervisor + 3 个 Specialist 子图
+1. 组装 Supervisor + 3 个 Specialist 节点
 2. 构建主 StateGraph 并编译
 3. 提供统一的 execute() 接口供上层调用
 
@@ -15,12 +15,13 @@
 
 持久化说明：
 - 主图使用统一 checkpointer（AsyncSqliteSaver / AsyncPostgresSaver）
-- Specialist 子图为无状态执行，不单独持久化
-- 会话状态通过 thread_id 隔离，支持重启后续接
+- Specialist 节点为无状态执行，不单独持久化
+- 每次诊断使用独立 run_id，避免新任务复用旧状态
 """
 
 from textwrap import dedent
 from typing import AsyncGenerator, Dict, Any, List, Union
+from uuid import uuid4
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.constants import Send
 from langgraph.graph import END, START, StateGraph
@@ -33,19 +34,18 @@ from app.agent.multi_agent.supervisor import supervisor_node
 from app.agent.multi_agent.log_analyzer import LogAnalyzer
 from app.agent.multi_agent.monitor_expert import MonitorExpert
 from app.agent.multi_agent.knowledge_retriever import KnowledgeRetriever
-from app.agent.multi_agent.supervisor import build_specialist_subgraph
 from app.core.checkpointer import get_checkpointer, thread_id_with_prefix
-from app.core.mem0_manager import save_memory
+from app.core.mem0_manager import schedule_memory_save
 
 class MultiAgentService:
     """Multi-Agent 服务
 
-    组装 Supervisor + Specialist 子图，提供统一执行接口。
+    组装 Supervisor + Specialist 节点，提供统一执行接口。
     graph 延迟编译（等 lifespan 初始化 checkpointer 后）。
     """
 
     def __init__(self):
-        """初始化服务，预编译子图，主图延迟编译"""
+        """初始化服务，主图延迟编译"""
         logger.info("初始化 Multi-Agent Service...")
 
         # 1. 创建 Specialist 实例
@@ -53,17 +53,7 @@ class MultiAgentService:
         self.monitor_expert = MonitorExpert()
         self.knowledge_retriever = KnowledgeRetriever()
 
-        # 2. 预编译子图（子图无状态，不需要 checkpointer）
-        self.subgraphs = {
-            "log_analyzer": build_specialist_subgraph("log_analyzer", self.log_analyzer),
-            "monitor_expert": build_specialist_subgraph("monitor_expert", self.monitor_expert),
-            "knowledge_retriever": build_specialist_subgraph(
-                "knowledge_retriever", self.knowledge_retriever
-            ),
-        }
-        logger.info(f"子图编译完成: {list(self.subgraphs.keys())}")
-
-        # 3. 主图延迟编译（在 execute 中首次调用时）
+        # 主图延迟编译（在 execute 中首次调用时）
         self._workflow = None
         self._graph = None
 
@@ -93,7 +83,17 @@ class MultiAgentService:
                 return [Send("aggregator", {})]
 
             user_input = state.get("user_input", "")
-            return [Send(s, {"user_input": user_input}) for s in specialists]
+            tasks = routing[-1].get("tasks", [])
+            return [
+                Send(
+                    specialist,
+                    {
+                        "user_input": user_input,
+                        "specialist_task": tasks[index] if index < len(tasks) else user_input,
+                    },
+                )
+                for index, specialist in enumerate(specialists)
+            ]
 
         workflow.add_conditional_edges(
             "supervisor",
@@ -140,29 +140,34 @@ class MultiAgentService:
         self,
         user_input: str,
         session_id: str = "default",
+        run_id: str | None = None,
+        resume: bool = False,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """执行 Multi-Agent 流程（统一 checkpointer 持久化）"""
         graph = await self._get_graph()
-        thread_id = thread_id_with_prefix(session_id, "multi")
+        if resume and not run_id:
+            raise ValueError("resume=true 时必须提供 run_id")
+        run_id = run_id or uuid4().hex
+        thread_id = thread_id_with_prefix(f"{session_id}-{run_id}", "multi")
         config_dict = {"configurable": {"thread_id": thread_id}}
 
         logger.info(f"[会话 {session_id}] 开始 Multi-Agent 执行: {user_input[:100]}...")
 
         try:
-            snapshot = await graph.aget_state(config_dict)
-            if snapshot and snapshot.values:
+            if resume:
+                snapshot = await graph.aget_state(config_dict)
+                if not snapshot or not snapshot.values:
+                    raise ValueError(f"找不到可恢复的 Multi-Agent 运行: {run_id}")
                 initial_state = dict(snapshot.values)
                 initial_state["user_input"] = user_input
                 initial_state["final_report"] = None
                 initial_state["error"] = None
-                logger.info(
-                    f"[会话 {session_id}] 从 checkpoint 恢复状态，"
-                    f"completed_tasks: {len(initial_state.get('completed_tasks', []))}"
-                )
+                logger.info(f"[会话 {session_id}] 恢复 Multi-Agent 运行: {run_id}")
             else:
                 initial_state: MultiAgentState = {
                     "messages": [],
                     "user_input": user_input,
+                    "specialist_task": None,
                     "routing": [],
                     "log_analysis": None,
                     "monitor_metrics": None,
@@ -172,7 +177,7 @@ class MultiAgentService:
                     "final_report": None,
                     "error": None,
                 }
-                logger.info(f"[会话 {session_id}] 无历史状态，全新执行")
+                logger.info(f"[会话 {session_id}] 新建 Multi-Agent 运行: {run_id}")
 
             async for event in graph.astream(
                 initial_state, config=config_dict, stream_mode="updates"
@@ -188,7 +193,8 @@ class MultiAgentService:
                                 "type": "routing",
                                 "specialists": routing.get("specialists", []),
                                 "reason": routing.get("reason", ""),
-                                "tasks": routing.get("task_plan", []),
+                                "tasks": routing.get("tasks", []),
+                                "run_id": run_id,
                             }
 
                     elif node_name in ["log_analyzer", "monitor_expert", "knowledge_retriever"]:
@@ -196,6 +202,7 @@ class MultiAgentService:
                             "type": "specialist_result",
                             "name": node_name,
                             "result": node_output,
+                            "run_id": run_id,
                         }
 
             final_state = await graph.aget_state(config_dict)
@@ -209,6 +216,7 @@ class MultiAgentService:
             yield {
                 "type": "complete",
                 "report": final_report,
+                "run_id": run_id,
             }
 
             logger.info(f"[会话 {session_id}] Multi-Agent 执行完成")
@@ -218,6 +226,7 @@ class MultiAgentService:
             yield {
                 "type": "error",
                 "message": f"执行失败: {str(e)}",
+                "run_id": run_id,
             }
 
     async def _generate_final_report(self, state: MultiAgentState) -> str:
@@ -247,6 +256,54 @@ class MultiAgentService:
 
         # 降级：字符串拼接
         return self._fallback_report(log_summary, monitor_summary, knowledge_context)
+
+    async def get_history(self, session_id: str, run_id: str) -> Dict[str, Any] | None:
+        """从 Checkpointer 重建 Multi-Agent 诊断时间线。"""
+        graph = await self._get_graph()
+        thread_id = thread_id_with_prefix(f"{session_id}-{run_id}", "multi")
+        snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
+        if not snapshot or not snapshot.values:
+            return None
+
+        state = snapshot.values
+        events: list[Dict[str, Any]] = []
+        routing = (state.get("routing") or [])[-1:]
+        if routing:
+            route = routing[0]
+            events.append({
+                "type": "routing",
+                "specialists": route.get("specialists", []),
+                "reason": route.get("reason", ""),
+                "tasks": route.get("tasks", []),
+            })
+
+        specialist_results = (
+            ("log_analyzer", state.get("log_analysis")),
+            ("monitor_expert", state.get("monitor_metrics")),
+        )
+        for name, result in specialist_results:
+            if result:
+                events.append({"type": "specialist_result", "name": name, "result": result})
+
+        knowledge = state.get("knowledge_context")
+        if knowledge:
+            events.append({
+                "type": "specialist_result",
+                "name": "knowledge_retriever",
+                "result": {"summary": knowledge},
+            })
+
+        report = state.get("final_report") or ""
+        if report:
+            events.append({"type": "complete", "report": report})
+
+        return {
+            "mode": "multi",
+            "session_id": session_id,
+            "run_id": run_id,
+            "question": state.get("user_input", ""),
+            "events": events,
+        }
 
     async def _generate_report_with_llm(
         self,
@@ -319,7 +376,7 @@ class MultiAgentService:
         logger.info(f"LLM 综合分析报告生成完成，长度: {len(report)} 字符")
         # === 新增：保存诊断结果到 Mem0 ===
         try:
-            save_memory(
+            schedule_memory_save(
                 messages=[
                     {"role": "user", "content": user_input[:1000]},
                     {"role": "assistant",

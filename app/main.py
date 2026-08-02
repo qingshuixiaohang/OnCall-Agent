@@ -15,6 +15,7 @@ from loguru import logger
 from app.api import chat, health, file, aiops, session, multi_agent, router
 from app.core.milvus_client import milvus_manager
 from app.core.checkpointer import setup_checkpointer, close_checkpointer
+from app.core.mem0_manager import flush_memory_tasks
 
 
 @asynccontextmanager
@@ -69,6 +70,8 @@ async def lifespan(app: FastAPI):
     yield
 
     # 关闭时执行
+    await flush_memory_tasks()
+
     logger.info("🔌 正在关闭 Milvus 连接...")
     milvus_manager.close()
 
@@ -89,7 +92,7 @@ app = FastAPI(
 # 配置 CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 生产环境应该限制具体域名
+    allow_origins=[origin.strip() for origin in config.cors_origins.split(",") if origin.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

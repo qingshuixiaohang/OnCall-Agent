@@ -15,7 +15,7 @@ const DEFAULT_Q: Record<string, string> = {
 };
 
 function App() {
-  const { view, setView, sessionId, isStreaming } = useStore();
+  const { view, setView, sessionId, isStreaming, setRunId } = useStore();
   const chatRef = useRef<ChatHandle>(null);
   const diagRef = useRef<DiagnosisHandle>(null);
 
@@ -23,8 +23,10 @@ function App() {
   const fire = (text: string, target: View) => {
     if (isStreaming) return;
     if (target === "chat") {
+      setRunId(null);
       chatRef.current?.send(text);
     } else {
+      setRunId(null);
       const q = text || DEFAULT_Q[target];
       diagRef.current?.run(q);
     }
@@ -32,6 +34,7 @@ function App() {
 
   // TopBar 只切换当前视图，不自动启动任何 Agent。
   const onPickView = (v: View) => {
+    if (v !== view) setRunId(null);
     setView(v);
   };
 

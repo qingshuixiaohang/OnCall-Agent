@@ -72,7 +72,7 @@ FastAPI 应用（默认端口 9900）
 |------|------|
 | 后端 | Python、FastAPI、Uvicorn |
 | Agent 编排 | LangChain、LangGraph |
-| 对话模型 | DashScope 兼容接口，默认模型由 `DASHSCOPE_MODEL` 配置 |
+| 对话模型 | DashScope 兼容接口，模型统一由 `RAG_MODEL` 配置 |
 | Embedding | SiliconFlow `BAAI/bge-m3` |
 | Rerank | SiliconFlow `BAAI/bge-reranker-v2-m3`，也支持 DashScope 后端 |
 | 知识库向量库 | Milvus |
@@ -118,7 +118,6 @@ DASHSCOPE_API_KEY=your_dashscope_api_key
 SILICONFLOW_API_KEY=your_siliconflow_api_key
 
 # 可选：模型
-DASHSCOPE_MODEL=qwen3.7-plus
 RAG_MODEL=qwen3.7-plus
 RERANK_BACKEND=siliconflow
 RERANK_MODEL=BAAI/bge-reranker-v2-m3
@@ -204,6 +203,17 @@ curl -X POST "http://localhost:9900/api/aiops" \
   --no-buffer
 ```
 
+每次未指定 `run_id` 的诊断都会创建一个新的独立运行，避免复用同一会话上一次诊断的计划和执行步骤。如果需要从已保存的工作流继续执行，传入原来的 `run_id` 和 `"resume": true`：
+
+```json
+{
+  "session_id": "session-001",
+  "run_id": "诊断事件中返回的 run_id",
+  "resume": true,
+  "question": "继续上一次诊断"
+}
+```
+
 ### 多 Agent 诊断请求
 
 ```bash
@@ -212,6 +222,8 @@ curl -X POST "http://localhost:9900/api/aiops_multi" \
   -d '{"session_id":"session-002","question":"全面诊断 test 服务当前状态"}' \
   --no-buffer
 ```
+
+Multi-Agent 诊断同样支持 `run_id` 和 `resume`。Supervisor 返回的每个 Specialist 任务会随路由事件传递给对应专家，专家返回的工具调用轨迹也会随结果事件返回，前端可以据此渲染日志、指标和知识文档组件。
 
 ### 上传知识库文档
 

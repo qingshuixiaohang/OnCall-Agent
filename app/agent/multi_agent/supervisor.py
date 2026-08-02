@@ -14,21 +14,23 @@
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence, Tuple
-import asyncio
+from typing import Any, Dict, List
 
 from textwrap import dedent
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.tools import BaseTool
-from langgraph.graph import END, START, StateGraph
 from loguru import logger
 from pydantic import BaseModel, Field
 
 from app.config import config
 from app.agent.multi_agent.state import MultiAgentState
-from app.agent.multi_agent.base_specialist import BaseSpecialist
 from langchain_qwq import ChatQwen
+
+SUPPORTED_SPECIALISTS = {
+    "log_analyzer",
+    "monitor_expert",
+    "knowledge_retriever",
+}
 
 
 # ========== 路由决策模型 ==========
@@ -130,6 +132,23 @@ async def supervisor_node(state: MultiAgentState) -> Dict[str, Any]:
             reason = decision.get("reason", "") if isinstance(decision, dict) else ""
             tasks = decision.get("tasks", []) if isinstance(decision, dict) else []
 
+        # 即使模型输出了错误名称，也不能让它直接进入图的动态边。
+        task_pairs = list(zip(specialists, tasks))
+        if len(tasks) < len(specialists):
+            task_pairs.extend(
+                (specialist, f"分析与用户问题相关的 {specialist} 信息")
+                for specialist in specialists[len(tasks):]
+            )
+
+        valid_pairs = [
+            (specialist, task)
+            for specialist, task in task_pairs
+            if specialist in SUPPORTED_SPECIALISTS
+        ]
+        deduplicated_pairs = list(dict.fromkeys(valid_pairs))
+        specialists = [specialist for specialist, _ in deduplicated_pairs]
+        tasks = [task for _, task in deduplicated_pairs]
+
         logger.info(f"路由决策: {specialists}")
         logger.info(f"决策理由: {reason}")
 
@@ -147,6 +166,7 @@ async def supervisor_node(state: MultiAgentState) -> Dict[str, Any]:
     routing_record = {
         "specialists": specialists,
         "reason": reason,
+        "tasks": tasks,
         "timestamp": _now_iso(),
     }
 
@@ -155,62 +175,6 @@ async def supervisor_node(state: MultiAgentState) -> Dict[str, Any]:
         "task_plan": tasks,
         "completed_tasks": [],
     }
-
-
-# ========== 子图构建函数 ==========
-
-def build_specialist_subgraph(name: str, agent: BaseSpecialist) -> StateGraph:
-    """
-    为每个 Specialist 构建一个简单的子图
-    
-    结构：START -> run_specialist -> END
-    
-    参数：
-        name: 子图名称（如 "log_analyzer"）
-        agent: Specialist 实例
-    
-    返回：
-        编译后的 LangGraph 子图
-    """
-    async def run_specialist(state: MultiAgentState) -> Dict[str, Any]:
-        """子图节点：运行 Specialist"""
-        return await agent.run(state)
-
-    subgraph = StateGraph(MultiAgentState)
-    subgraph.add_node("run", run_specialist)
-    subgraph.add_edge(START, "run")
-    subgraph.add_edge("run", END)
-
-    return subgraph.compile()
-
-
-# ========== 并行执行辅助 ==========
-
-async def _run_parallel(
-    subgraphs: Dict[str, StateGraph],
-    specialists: List[str],
-    state: MultiAgentState,
-) -> List[Tuple[str, Dict[str, Any]]]:
-    """
-    并行执行多个 Specialist 子图
-    
-    使用 asyncio.gather 实现并行执行，无依赖的 Specialist 同时运行。
-    每个 Specialist 的结果作为 (name, result) 元组返回。
-    """
-    async def run_one(name: str) -> Tuple[str, Dict[str, Any]]:
-        try:
-            result = await subgraphs[name].ainvoke(state)
-            return name, result
-        except Exception as e:
-            logger.error(f"Specialist {name} 执行异常: {e}")
-            return name, {"error": str(e)}
-
-    tasks = [run_one(name) for name in specialists if name in subgraphs]
-    if not tasks:
-        return []
-
-    results = await asyncio.gather(*tasks, return_exceptions=False)
-    return list(results)
 
 
 # ========== 时间辅助 ==========

@@ -120,6 +120,9 @@ export function RoutingCard({ reason, specialists }: { reason: string; specialis
 export function SpecialistCard({ name, result }: { name: string; result: { summary?: string; [k: string]: unknown } }) {
   const [collapsed, setCollapsed] = useState(false);
   const summary = result.summary || "";
+  const toolCalls = Array.isArray(result.tool_calls)
+    ? result.tool_calls.filter((tool): tool is ToolCall => Boolean(tool && typeof tool === "object"))
+    : [];
   return (
     <div className="animate-fade-slide rounded-xl border border-oncall-border bg-oncall-card/70 p-3">
       <button onClick={() => setCollapsed((c) => !c)} className="mb-2 flex w-full items-center gap-2 text-left">
@@ -130,6 +133,11 @@ export function SpecialistCard({ name, result }: { name: string; result: { summa
         <CheckCircle2 size={14} className="ml-auto text-oncall-accent" />
       </button>
       {summary && !collapsed && <Markdown content={summary} className="text-xs" />}
+      {!collapsed && toolCalls.length > 0 && (
+        <div className="mt-3 space-y-2 border-t border-oncall-border pt-2">
+          {toolCalls.map((tool, index) => <ToolResultRenderer key={`${tool.name}-${index}`} tool={tool} />)}
+        </div>
+      )}
     </div>
   );
 }
