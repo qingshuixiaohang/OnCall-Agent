@@ -8,11 +8,10 @@ import re
 from typing import Dict, Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_qwq import ChatQwen
 from loguru import logger
 
 from app.agent.router.prompts import ROUTER_SYSTEM_PROMPT, ROUTER_USER_TEMPLATE
-from app.config import config
+from app.core.llm_factory import llm_factory
 
 
 class RouterAgent:
@@ -24,9 +23,7 @@ class RouterAgent:
 
     def __init__(self):
         """初始化路由 Agent"""
-        self.model = ChatQwen(
-            model=config.rag_model,
-            api_key=config.dashscope_api_key,
+        self.model = llm_factory.create_chat_model(
             temperature=0.1,
             streaming=False,
         )

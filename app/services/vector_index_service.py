@@ -6,7 +6,9 @@ from typing import Any, Dict, Optional
 
 from loguru import logger
 
+from app.config import resolve_project_path
 from app.services.document_splitter_service import document_splitter_service
+from app.services.keyword_index_service import keyword_index_service
 from app.services.vector_store_manager import vector_store_manager
 
 
@@ -61,7 +63,7 @@ class VectorIndexService:
 
     def __init__(self):
         """初始化向量索引服务"""
-        self.upload_path = "./uploads"
+        self.upload_path = str(resolve_project_path("./uploads"))
         logger.info("向量索引服务初始化完成")
 
     def index_directory(self, directory_path: Optional[str] = None) -> IndexingResult:
@@ -133,7 +135,11 @@ class VectorIndexService:
             result.end_time = datetime.now()
             return result
 
-    def index_single_file(self, file_path: str):
+    def index_single_file(
+        self,
+        file_path: str,
+        metadata: Optional[Dict[str, str]] = None,
+    ):
         """
         索引单个文件 (使用新的 LangChain 分割器)
 
@@ -159,14 +165,20 @@ class VectorIndexService:
             # 2. 删除该文件的旧数据（如果存在）
             normalized_path = path.as_posix()
             vector_store_manager.delete_by_source(normalized_path)
+            keyword_index_service.delete_by_source(normalized_path)
 
             # 3. 使用新的文档分割器
-            documents = document_splitter_service.split_document(content, normalized_path)
+            documents = document_splitter_service.split_document(
+                content,
+                normalized_path,
+                extra_metadata=metadata,
+            )
             logger.info(f"文档分割完成: {file_path} -> {len(documents)} 个分片")
 
             # 4. 添加文档到向量存储
             if documents:
-                vector_store_manager.add_documents(documents)
+                document_ids = vector_store_manager.add_documents(documents)
+                keyword_index_service.upsert_documents(document_ids, documents)
                 logger.info(f"文件索引完成: {file_path}, 共 {len(documents)} 个分片")
             else:
                 logger.warning(f"文件内容为空或无法分割: {file_path}")

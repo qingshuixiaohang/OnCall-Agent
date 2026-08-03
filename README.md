@@ -23,7 +23,7 @@ SuperBizAgent（仓库名：OnCall-Agent）是一个面向企业运维和 OnCall
 
 | 能力 | 说明 |
 |------|------|
-| RAG 知识库问答 | 支持 `.md`、`.txt`、`.pdf`、`.docx` 文档上传、分片、向量化、向量召回和语义重排 |
+| RAG 知识库问答 | 支持 `.md`、`.txt`、`.pdf`、`.docx` 文档上传、分片、向量化、向量与关键词混合召回、元数据过滤和语义重排 |
 | 单 Agent 诊断 | 使用 Planner、Executor、Replanner 构成可追踪的 Plan-Execute-Replan 工作流 |
 | 多 Agent 诊断 | 使用 Supervisor 调度 LogAnalyzer、MonitorExpert、KnowledgeRetriever 等 Specialist，并行收集诊断信息 |
 | MCP 工具调用 | 通过 Model Context Protocol 访问 CLS 日志服务和监控服务，支持工具筛选、重试和异常降级 |
@@ -48,7 +48,7 @@ FastAPI 应用（默认端口 9900）
   ├── RAG Agent
   │     ├── LangGraph 对话流程
   │     ├── MCP 工具调用
-  │     └── Milvus 检索 + Rerank
+  │     └── Milvus 向量检索 + SQLite 关键词检索 + Rerank
   │
   ├── AIOps Agent
   │     └── Planner → Executor → Replanner
@@ -61,6 +61,7 @@ FastAPI 应用（默认端口 9900）
   └── LangGraph Checkpointer
         │
         ├── Milvus：知识库文档向量
+        ├── SQLite FTS5：知识库关键词索引
         ├── Qdrant 本地目录：Mem0 记忆向量
         ├── SQLite：会话状态和 Mem0 操作历史
         └── MCP Servers：日志和监控数据源
@@ -114,13 +115,26 @@ cp .env.example .env
 至少配置以下变量：
 
 ```dotenv
+# 生产 Agent 模型配置（推荐）
+LLM_PROVIDER=openai_compatible
+LLM_API_KEY=your_runtime_llm_api_key
+LLM_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_MODEL=qwen3.7-plus
+LLM_ENABLE_THINKING=
+LLM_TIMEOUT=60
+LLM_MAX_RETRIES=2
+
+# 旧配置兼容：未配置 LLM_* 时回退到以下变量
 DASHSCOPE_API_KEY=your_dashscope_api_key
+DASHSCOPE_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
 SILICONFLOW_API_KEY=your_siliconflow_api_key
 
 # 可选：模型
 RAG_MODEL=qwen3.7-plus
 RERANK_BACKEND=siliconflow
 RERANK_MODEL=BAAI/bge-reranker-v2-m3
+RAG_HYBRID_ENABLED=true
+RAG_MIN_RERANK_SCORE=0.25
 
 # 可选：MCP 服务地址
 MCP_CLS_TRANSPORT=sse
@@ -157,7 +171,7 @@ npm run dev
 python app/main.py
 ```
 
-后端默认地址为 `http://localhost:9900`。生产模式下，先构建前端：
+后端默认地址为 `http://localhost:9900`。后端会将 `uploads` 和关键词索引路径解析到项目根目录，不要求必须从项目根目录启动。生产模式下，先构建前端：
 
 ```bash
 cd frontend
@@ -167,6 +181,24 @@ python app/main.py
 ```
 
 构建后的 `frontend/dist` 会由 FastAPI 托管；如果构建目录不存在，后端会回退到旧的 `static/` 目录。
+
+### 6. 建立知识库索引
+
+上传文档时可以通过 multipart 字段补充元数据，查询时用于过滤：
+
+```text
+service_name=payment-service
+environment=prod
+document_type=runbook
+```
+
+启用混合检索后，首次升级需要重新索引已有文档，使 SQLite FTS5 关键词索引与 Milvus 保持同步：
+
+```bash
+curl.exe -X POST "http://localhost:9900/api/index_directory"
+```
+
+新增或覆盖上传的文档会自动同时更新 Milvus 向量索引和 SQLite 关键词索引。
 
 ## API 接口
 

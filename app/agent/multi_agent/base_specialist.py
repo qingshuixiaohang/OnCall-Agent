@@ -11,14 +11,14 @@ import json
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
-from langchain_qwq import ChatQwen
 from langgraph.prebuilt import ToolNode
 from loguru import logger
 
-from app.config import config
 from app.agent.multi_agent.state import MultiAgentState
+from app.core.llm_factory import llm_factory
 from app.core.mem0_manager import asearch_memory
 
 
@@ -28,16 +28,15 @@ class BaseSpecialist(ABC):
     def __init__(self, name: str, description: str):
         self.name = name
         self.description = description
-        self._llm: Optional[ChatQwen] = None  # 延迟创建
+        self._llm: Optional[BaseChatModel] = None  # 延迟创建
 
     @property
-    def llm(self) -> ChatQwen:
+    def llm(self) -> BaseChatModel:
         """延迟创建 LLM 实例，不需要 LLM 的 Specialist 不会触发创建"""
         if self._llm is None:
-            self._llm = ChatQwen(
-                model=config.rag_model,
-                api_key=config.dashscope_api_key,
+            self._llm = llm_factory.create_chat_model(
                 temperature=0,
+                streaming=False,
             )
         return self._llm
 

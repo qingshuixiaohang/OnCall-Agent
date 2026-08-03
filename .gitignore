@@ -6,6 +6,7 @@ mcp_servers/.env
 
 # ========== Python ==========
 __pycache__/
+evals/reports/*.json
 *.py[cod]
 *$py.class
 *.so

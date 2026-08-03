@@ -13,6 +13,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+def resolve_project_path(value: str | Path) -> Path:
+    """将相对路径固定解析到项目根目录，避免受启动目录影响。"""
+    path = Path(value)
+    return path if path.is_absolute() else _PROJECT_ROOT / path
+
+
 class Settings(BaseSettings):
     """应用配置"""
 
@@ -20,6 +26,7 @@ class Settings(BaseSettings):
         env_file=str(_PROJECT_ROOT / ".env"),
         env_file_encoding="utf-8",
         case_sensitive=False,
+        env_ignore_empty=True,
         extra="ignore",
     )
 
@@ -31,8 +38,38 @@ class Settings(BaseSettings):
     port: int = 9900
     cors_origins: str = "http://localhost:5173,http://localhost:9900"
 
-    # DashScope 配置（API Key；模型统一由 rag_model 配置）
+    # DashScope 配置（API Key 和地址；模型统一由 rag_model 配置）
     dashscope_api_key: str = ""  # 默认空字符串，实际使用需从环境变量加载
+    dashscope_api_base: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+    # 生产 Agent 运行时模型配置。LLM_* 优先，兼容旧 DASHSCOPE_*/RAG_MODEL 配置。
+    llm_provider: str = Field(
+        default="openai_compatible",
+        validation_alias=AliasChoices("LLM_PROVIDER"),
+    )
+    llm_model: str = Field(
+        default="qwen3.7-plus",
+        validation_alias=AliasChoices("LLM_MODEL", "RAG_MODEL", "DASHSCOPE_MODEL"),
+    )
+    llm_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("LLM_API_KEY", "DASHSCOPE_API_KEY"),
+    )
+    llm_api_base: str = Field(
+        default="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        validation_alias=AliasChoices("LLM_API_BASE", "DASHSCOPE_API_BASE"),
+    )
+    llm_enable_thinking: bool | None = Field(
+        default=None,
+        validation_alias=AliasChoices("LLM_ENABLE_THINKING"),
+    )
+    llm_timeout: float = Field(default=60.0, validation_alias=AliasChoices("LLM_TIMEOUT"))
+    llm_max_retries: int = Field(default=2, validation_alias=AliasChoices("LLM_MAX_RETRIES"))
+
+    # Ragas 评审模型配置，与答案生成模型独立
+    rag_eval_api_key: str = ""
+    rag_eval_api_base: str = "https://api.stepfun.com/step_plan/v1"
+    rag_eval_model: str = "step-3.7-flash"
 
     # SiliconFlow 配置（嵌入向量模型）
     siliconflow_api_key: str = ""
@@ -56,6 +93,10 @@ class Settings(BaseSettings):
     rerank_backend: str = "siliconflow"  # 重排后端：siliconflow（免费）或 dashscope（阿里云百炼）
     rerank_model: str = "BAAI/bge-reranker-v2-m3"  # SiliconFlow 免费重排模型
     rag_retrieval_k: int = 9  # 粗排召回数量（重排前的候选文档数，建议为 rag_top_k 的 2-3 倍）
+    rag_keyword_k: int = 9  # 关键词索引召回数量
+    rag_hybrid_enabled: bool = True  # 是否合并向量召回和关键词召回
+    rag_min_rerank_score: float = 0.25  # 重排最低相关性分数
+    rag_keyword_index_path: str = "./volumes/rag_keywords.db"
 
     # 文档分块配置
     chunk_max_size: int = 800

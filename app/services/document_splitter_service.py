@@ -9,7 +9,7 @@
 """
 
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional
 
 from langchain_community.document_loaders import Docx2txtLoader, PyPDFLoader
 from langchain_core.documents import Document
@@ -85,7 +85,12 @@ class DocumentSplitterService:
         logger.info(f"文本提取完成: {file_path} ({ext}), 长度: {len(extracted)} 字符")
         return extracted
 
-    def split_document(self, content: str, file_path: str = "") -> List[Document]:
+    def split_document(
+        self,
+        content: str,
+        file_path: str = "",
+        extra_metadata: Optional[Dict[str, str]] = None,
+    ) -> List[Document]:
         """
         智能分割文档 (根据文件类型选择分割器)
 
@@ -99,16 +104,21 @@ class DocumentSplitterService:
         ext = Path(file_path).suffix.lower()
 
         if ext == ".md":
-            return self.split_markdown(content, file_path)
+            return self.split_markdown(content, file_path, extra_metadata)
         elif ext in (".txt", ".pdf", ".docx"):
-            return self.split_text(content, file_path)
+            return self.split_text(content, file_path, extra_metadata)
         else:
             logger.warning(f"未知文件类型 {ext}，使用默认文本分割器")
-            return self.split_text(content, file_path)
+            return self.split_text(content, file_path, extra_metadata)
 
     # ─────────────────────── 分片方法 ───────────────────────
 
-    def split_markdown(self, content: str, file_path: str = "") -> List[Document]:
+    def split_markdown(
+        self,
+        content: str,
+        file_path: str = "",
+        extra_metadata: Optional[Dict[str, str]] = None,
+    ) -> List[Document]:
         """
         分割 Markdown 文档 (两阶段分割 + 合并小片段)
 
@@ -143,6 +153,8 @@ class DocumentSplitterService:
                 doc.metadata["_source"] = file_path
                 doc.metadata["_extension"] = ".md"
                 doc.metadata["_file_name"] = Path(file_path).name
+                if extra_metadata:
+                    doc.metadata.update(extra_metadata)
 
             logger.info(f"Markdown 分割完成: {file_path} -> {len(final_docs)} 个分片")
             return final_docs
@@ -151,7 +163,12 @@ class DocumentSplitterService:
             logger.error(f"Markdown 分割失败: {file_path}, 错误: {e}")
             raise
 
-    def split_text(self, content: str, file_path: str = "") -> List[Document]:
+    def split_text(
+        self,
+        content: str,
+        file_path: str = "",
+        extra_metadata: Optional[Dict[str, str]] = None,
+    ) -> List[Document]:
         """
         分割纯文本文档
 
@@ -174,15 +191,17 @@ class DocumentSplitterService:
         try:
             ext = Path(file_path).suffix.lower() if file_path else ".txt"
 
+            metadata = {
+                "_source": file_path,
+                "_extension": ext,
+                "_file_name": Path(file_path).name if file_path else "",
+            }
+            if extra_metadata:
+                metadata.update(extra_metadata)
+
             docs = self.text_splitter.create_documents(
                 texts=[content],
-                metadatas=[
-                    {
-                        "_source": file_path,
-                        "_extension": ext,
-                        "_file_name": Path(file_path).name if file_path else "",
-                    }
-                ],
+                metadatas=[metadata],
             )
 
             logger.info(f"文本分割完成: {file_path} -> {len(docs)} 个分片")

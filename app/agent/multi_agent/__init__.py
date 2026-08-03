@@ -25,16 +25,15 @@ from uuid import uuid4
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.constants import Send
 from langgraph.graph import END, START, StateGraph
-from langchain_qwq import ChatQwen
 from loguru import logger
 
-from app.config import config
 from app.agent.multi_agent.state import MultiAgentState
 from app.agent.multi_agent.supervisor import supervisor_node
 from app.agent.multi_agent.log_analyzer import LogAnalyzer
 from app.agent.multi_agent.monitor_expert import MonitorExpert
 from app.agent.multi_agent.knowledge_retriever import KnowledgeRetriever
 from app.core.checkpointer import get_checkpointer, thread_id_with_prefix
+from app.core.llm_factory import llm_factory
 from app.core.mem0_manager import schedule_memory_save
 
 class MultiAgentService:
@@ -357,10 +356,9 @@ class MultiAgentService:
             """).strip()),
         ])
 
-        llm = ChatQwen(
-            model=config.rag_model,
-            api_key=config.dashscope_api_key,
+        llm = llm_factory.create_chat_model(
             temperature=0,
+            streaming=False,
         )
 
         messages = prompt.format_messages(

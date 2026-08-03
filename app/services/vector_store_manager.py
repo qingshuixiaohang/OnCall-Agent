@@ -1,6 +1,6 @@
 """向量存储管理器 - 封装 Milvus VectorStore 操作"""
 
-from typing import List
+from typing import List, Optional
 
 from langchain_core.documents import Document
 from langchain_milvus import Milvus
@@ -48,7 +48,8 @@ class VectorStoreManager:
                 text_field="content",  # 文本内容存储到 content 字段
                 vector_field="vector",  # 向量存储到 vector 字段
                 primary_field="id",  # 主键字段
-                enable_dynamic_field=True,  # 动态字段（替代已废弃的 metadata_field）
+                enable_dynamic_field=False,
+                metadata_field="metadata",
             )
 
             logger.info(
@@ -60,7 +61,7 @@ class VectorStoreManager:
             logger.error(f"VectorStore 初始化失败: {e}")
             raise
 
-    def add_documents(self, documents: List[Document]) -> List[str]:
+    def add_documents(self, documents: List[Document], ids: Optional[List[str]] = None) -> List[str]:
         """
         批量添加文档到向量存储（自动批量向量化）
 
@@ -76,18 +77,23 @@ class VectorStoreManager:
             start_time = time.time()
 
             # 为每个文档生成唯一 id（因为 auto_id=False）
-            ids = [str(uuid.uuid4()) for _ in documents]
+            document_ids = ids if ids is not None else [str(uuid.uuid4()) for _ in documents]
+            if len(document_ids) != len(documents):
+                raise ValueError("ids 数量必须和 documents 数量一致")
+
+            for document, document_id in zip(documents, document_ids, strict=True):
+                document.metadata["_chunk_id"] = document_id
 
             # LangChain Milvus 的 add_documents 会自动调用 embedding_function
             # 并进行批量处理，性能更好
-            result_ids = self.vector_store.add_documents(documents, ids=ids)
+            result_ids = self.vector_store.add_documents(documents, ids=document_ids)
 
             elapsed = time.time() - start_time
             logger.info(
                 f"批量添加 {len(documents)} 个文档到 VectorStore 完成, "
                 f"耗时: {elapsed:.2f}秒, 平均: {elapsed/len(documents):.2f}秒/个"
             )
-            return result_ids
+            return result_ids or document_ids
         except Exception as e:
             logger.error(f"添加文档失败: {e}")
             raise
@@ -105,17 +111,16 @@ class VectorStoreManager:
         try:
             # 使用 milvus_manager 获取已连接的 collection
             collection = milvus_manager.get_collection()
-            
+
             # metadata 是 JSON 字段，使用 JSON 路径查询语法
             # _source 是文档的来源文件路径
             expr = f'metadata["_source"] == "{file_path}"'
-            
+
             result = collection.delete(expr)
             deleted_count = result.delete_count if hasattr(result, "delete_count") else 0
-            
+
             logger.info(f"删除文件旧数据: {file_path}, 删除数量: {deleted_count}")
             return deleted_count
-            
         except Exception as e:
             logger.warning(f"删除旧数据失败 (可能是首次索引): {e}")
             return 0
@@ -129,7 +134,9 @@ class VectorStoreManager:
         """
         return self.vector_store
 
-    def similarity_search(self, query: str, k: int = 3) -> List[Document]:
+    def similarity_search(
+        self, query: str, k: int = 3, expr: Optional[str] = None
+    ) -> List[Document]:
         """
         相似度搜索
 
@@ -141,7 +148,7 @@ class VectorStoreManager:
             List[Document]: 相关文档列表
         """
         try:
-            docs = self.vector_store.similarity_search(query, k=k)
+            docs = self.vector_store.similarity_search(query, k=k, expr=expr)
             logger.debug(f"相似度搜索完成: query='{query}', 结果数={len(docs)}")
             return docs
         except Exception as e:

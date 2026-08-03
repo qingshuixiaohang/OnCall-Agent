@@ -57,6 +57,10 @@ dev = [
     "ipython>=8.20.0",
     "ipdb>=0.13.13",
 ]
+eval = [
+    "datasets>=2.14.0",
+    "ragas>=0.3.0,<1.0.0",
+]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]

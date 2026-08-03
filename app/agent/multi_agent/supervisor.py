@@ -17,14 +17,12 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from textwrap import dedent
-from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from app.config import config
 from app.agent.multi_agent.state import MultiAgentState
-from langchain_qwq import ChatQwen
+from app.core.llm_factory import llm_factory
 
 SUPPORTED_SPECIALISTS = {
     "log_analyzer",
@@ -74,10 +72,10 @@ async def supervisor_node(state: MultiAgentState) -> Dict[str, Any]:
     ]
 
     # 2. 调用 LLM 做路由决策
-    llm = ChatQwen(
-        model=config.rag_model,
-        api_key=config.dashscope_api_key,
+    llm = llm_factory.create_chat_model(
         temperature=0,
+        streaming=False,
+        structured=True,
     )
 
     prompt = ChatPromptTemplate.from_messages(

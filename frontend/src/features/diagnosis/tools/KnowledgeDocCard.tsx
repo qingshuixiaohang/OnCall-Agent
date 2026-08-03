@@ -3,9 +3,9 @@ import { BookOpen, ChevronDown, ChevronRight } from "lucide-react";
 
 interface Doc {
   page_content?: string;
-  metadata?: { source?: string; title?: string; score?: number; relevance?: string };
+  metadata?: { source?: string; title?: string; score?: number | null; relevance?: string };
   title?: string;
-  score?: number;
+  score?: number | null;
   relevance?: string;
   content?: string;
 }

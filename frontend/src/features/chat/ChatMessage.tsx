@@ -1,12 +1,15 @@
 import { useState } from "react";
 import { User, Bot, Wrench, ChevronDown, ChevronRight } from "lucide-react";
 import { Markdown } from "../../components/common/Markdown";
+import { KnowledgeDocCard } from "../diagnosis/tools/KnowledgeDocCard";
+import type { KnowledgeSource } from "../../lib/types";
 
 export interface ChatMsg {
   id: string;
   role: "user" | "assistant";
   content: string;
   tools?: { name: string; status: "start" | "end"; input?: unknown }[];
+  sources?: KnowledgeSource[];
   streaming?: boolean;
   error?: boolean;
 }
@@ -73,6 +76,11 @@ export function ChatMessage({ msg }: { msg: ChatMsg }) {
             {msg.streaming && (
               <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-oncall-accent align-middle" />
             )}
+          </div>
+        )}
+        {msg.sources && msg.sources.length > 0 && (
+          <div className="mt-2">
+            <KnowledgeDocCard data={{ docs: msg.sources }} />
           </div>
         )}
       </div>

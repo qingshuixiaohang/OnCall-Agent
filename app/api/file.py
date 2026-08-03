@@ -2,16 +2,17 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
-
-from app.services.vector_index_service import vector_index_service
 from loguru import logger
+
+from app.config import resolve_project_path
+from app.services.vector_index_service import vector_index_service
 
 router = APIRouter()
 
 # 文件上传后存储的路径
-UPLOAD_DIR = Path("./uploads")
+UPLOAD_DIR = resolve_project_path("./uploads")
 # 支持的文件类型
 ALLOWED_EXTENSIONS = ["txt", "md", "pdf", "docx"]
 # 单个文件支持最大大小
@@ -19,7 +20,12 @@ MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
 
 @router.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(
+    file: UploadFile = File(...),
+    service_name: str | None = Form(default=None),
+    environment: str | None = Form(default=None),
+    document_type: str | None = Form(default=None),
+):
     """
     上传文件并自动创建向量索引
 
@@ -67,10 +73,23 @@ async def upload_file(file: UploadFile = File(...)):
 
         logger.info(f"文件上传成功: {file_path}")
 
+        document_metadata = {
+            key: value.strip()
+            for key, value in {
+                "service_name": service_name,
+                "environment": environment,
+                "document_type": document_type,
+            }.items()
+            if value and value.strip()
+        }
+
         # 5. 自动创建向量索引
         try:
             logger.info(f"开始为上传文件创建向量索引: {file_path}")
-            vector_index_service.index_single_file(str(file_path))
+            vector_index_service.index_single_file(
+                str(file_path),
+                metadata=document_metadata,
+            )
             logger.info(f"向量索引创建成功: {file_path}")
         except Exception as e:
             logger.error(f"向量索引创建失败: {file_path}, 错误: {e}")
@@ -94,7 +113,7 @@ async def upload_file(file: UploadFile = File(...)):
         raise
     except Exception as e:
         logger.error(f"文件上传失败: {e}")
-        raise HTTPException(status_code=500, detail=f"文件上传失败: {e}")
+        raise HTTPException(status_code=500, detail=f"文件上传失败: {e}") from e
 
 
 @router.post("/index_directory")
@@ -125,7 +144,7 @@ async def index_directory(directory_path: str = None):
 
     except Exception as e:
         logger.error(f"索引目录失败: {e}")
-        raise HTTPException(status_code=500, detail=f"索引目录失败: {e}")
+        raise HTTPException(status_code=500, detail=f"索引目录失败: {e}") from e
 
 
 def _get_file_extension(filename: str) -> str:

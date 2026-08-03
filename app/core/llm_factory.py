@@ -1,52 +1,73 @@
-"""LLM 工厂类
-
-使用 LangChain ChatOpenAI 通过 OpenAI 兼容模式调用阿里云 DashScope
-这种方式便于后续切换到其他支持 OpenAI API 的模型提供商
-
-支持的模型提供商（只需修改 base_url 和 api_key）：
-- 阿里云 DashScope: https://dashscope.aliyuncs.com/compatible-mode/v1
-- OpenAI: https://api.openai.com/v1
-- Azure OpenAI: https://{resource}.openai.azure.com
-- 其他兼容 OpenAI API 的服务
-"""
+"""生产 Agent 的统一 LLM 创建入口。"""
 
 from langchain_openai import ChatOpenAI
+
 from app.config import config
-from loguru import logger
 
 
 class LLMFactory:
-    """LLM 工厂类 - 使用 OpenAI 兼容模式"""
+    """通过 OpenAI 兼容协议创建生产 Agent 使用的聊天模型。"""
 
-    # 阿里云 DashScope OpenAI 兼容模式 URL
-    DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    SUPPORTED_PROVIDERS = {"openai_compatible", "openai", "dashscope", "stepfun"}
 
-    @staticmethod
+    @classmethod
     def create_chat_model(
+        cls,
         model: str | None = None,
         temperature: float = 0.7,
         streaming: bool = True,
         base_url: str | None = None,
         api_key: str | None = None,
+        structured: bool = False,
     ) -> ChatOpenAI:
-        model = model or config.dashscope_model
-        base_url = base_url or LLMFactory.DASHSCOPE_BASE_URL
-        api_key = api_key or config.dashscope_api_key
+        resolved_model = model or config.llm_model
+        resolved_base_url = base_url or config.llm_api_base
+        resolved_api_key = api_key or config.llm_api_key
 
-        # 参考：https://help.aliyun.com/zh/model-studio/getting-started/models
-        extra_body = {}
-        extra_body["stream"] = streaming
+        cls._validate_provider(config.llm_provider)
+        extra_body = cls._extra_body_for_model(resolved_model)
 
-        llm = ChatOpenAI(
-            model=model,
+        return ChatOpenAI(
+            model=resolved_model,
             temperature=temperature,
             streaming=streaming,
-            base_url=base_url,
-            api_key=api_key,
+            base_url=resolved_base_url,
+            api_key=resolved_api_key,
+            timeout=config.llm_timeout,
+            max_retries=config.llm_max_retries,
             extra_body=extra_body if extra_body else None,
         )
 
-        return llm
+    @classmethod
+    def _extra_body_for_model(cls, model: str) -> dict[str, bool]:
+        if config.llm_enable_thinking is not None:
+            return {"enable_thinking": config.llm_enable_thinking}
+        if model.lower().startswith("qwen3.7"):
+            return {"enable_thinking": True}
+        return {}
+
+    @classmethod
+    def _validate_provider(cls, provider: str) -> None:
+        if provider.lower() not in cls.SUPPORTED_PROVIDERS:
+            supported = ", ".join(sorted(cls.SUPPORTED_PROVIDERS))
+            raise ValueError(f"不支持的 LLM_PROVIDER={provider}，可选值: {supported}")
+
+    @classmethod
+    def validate_runtime_config(cls) -> None:
+        cls._validate_provider(config.llm_provider)
+        missing = []
+        if not config.llm_model.strip():
+            missing.append("LLM_MODEL/RAG_MODEL")
+        if not config.llm_api_key.strip():
+            missing.append("LLM_API_KEY/DASHSCOPE_API_KEY")
+        if not config.llm_api_base.strip():
+            missing.append("LLM_API_BASE/DASHSCOPE_API_BASE")
+        if missing:
+            raise RuntimeError(f"生产 Agent LLM 配置缺失: {', '.join(missing)}")
+        if config.llm_timeout <= 0:
+            raise RuntimeError("LLM_TIMEOUT 必须大于 0")
+        if config.llm_max_retries < 0:
+            raise RuntimeError("LLM_MAX_RETRIES 不能小于 0")
 
 # 全局 LLM 工厂实例
 llm_factory = LLMFactory()

@@ -79,6 +79,11 @@ export const ChatView = forwardRef<ChatHandle, {}>((_props, ref) => {
               ...m,
               tools: [...(m.tools || []), { name: ev.data.tool, status: ev.data.status, input: ev.data.input }],
             }));
+          } else if (ev.type === "search_results") {
+            patch((m) => ({
+              ...m,
+              sources: ev.data.documents || [],
+            }));
           } else if (ev.type === "done") {
             patch((m) => ({ ...m, content: ev.data?.answer || m.content, streaming: false }));
           } else if (ev.type === "error") {

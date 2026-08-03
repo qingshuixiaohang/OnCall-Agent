@@ -15,6 +15,7 @@ from loguru import logger
 from app.api import chat, health, file, aiops, session, multi_agent, router
 from app.core.milvus_client import milvus_manager
 from app.core.checkpointer import setup_checkpointer, close_checkpointer
+from app.core.llm_factory import llm_factory
 from app.core.mem0_manager import flush_memory_tasks
 
 
@@ -42,6 +43,12 @@ async def lifespan(app: FastAPI):
         os.environ["NO_PROXY"] = _new_no_proxy
         os.environ["no_proxy"] = _new_no_proxy
         logger.info(f"🔧 已设置 NO_PROXY={_new_no_proxy}")
+
+    llm_factory.validate_runtime_config()
+    logger.info(
+        f"✅ 生产 Agent LLM 配置有效: provider={config.llm_provider}, "
+        f"model={config.llm_model}"
+    )
 
     # LangSmith 追踪状态
     _tracing = os.environ.get("LANGCHAIN_TRACING_V2", "").lower()

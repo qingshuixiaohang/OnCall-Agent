@@ -13,11 +13,10 @@ LangSmith 也能看到每一步的细节，而不是 executor 黑盒。
 import json
 from typing import Dict, Any, Optional
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_qwq import ChatQwen
 from langgraph.prebuilt import ToolNode
 from loguru import logger
 
-from app.config import config
+from app.core.llm_factory import llm_factory
 from app.tools import get_current_time, retrieve_knowledge
 from app.agent.mcp_client import get_mcp_client_with_retry
 from .state import PlanExecuteState
@@ -138,10 +137,9 @@ async def executor(state: PlanExecuteState) -> Dict[str, Any]:
 
         all_tools = local_tools + mcp_tools
 
-        llm = ChatQwen(
-            model=config.rag_model,
-            api_key=config.dashscope_api_key,
-            temperature=0
+        llm = llm_factory.create_chat_model(
+            temperature=0,
+            streaming=False,
         )
         llm_with_tools = llm.bind_tools(all_tools)
 
