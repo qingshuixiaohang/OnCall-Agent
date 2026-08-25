@@ -4,10 +4,10 @@
 """
 
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any
+
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 
 # 项目根目录（config.py 在 app/ 下，所以父目录就是项目根目录）
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -131,7 +131,7 @@ class Settings(BaseSettings):
     langsmith_endpoint: str = "https://api.smith.langchain.com"
 
     @property
-    def mcp_servers(self) -> Dict[str, Dict[str, Any]]:
+    def mcp_servers(self) -> dict[str, dict[str, Any]]:
         """获取完整的 MCP 服务器配置"""
         return {
             "cls": {

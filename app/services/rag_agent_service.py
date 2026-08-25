@@ -12,8 +12,9 @@
 """
 
 import re
+from collections.abc import AsyncGenerator, Sequence
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Sequence
+from typing import Any
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
@@ -460,7 +461,7 @@ class RagAgentService:
         return len(normalized) >= 6 and any(term in normalized for term in cls._KNOWLEDGE_TERMS)
 
     @staticmethod
-    def _normalize_knowledge_result(result: Any) -> tuple[str, List[Document]]:
+    def _normalize_knowledge_result(result: Any) -> tuple[str, list[Document]]:
         if isinstance(result, tuple) and len(result) == 2:
             context, docs = result
             if isinstance(docs, list):
@@ -473,7 +474,7 @@ class RagAgentService:
         return "", []
 
     @staticmethod
-    def _serialize_knowledge_documents(docs: List[Document]) -> List[Dict[str, Any]]:
+    def _serialize_knowledge_documents(docs: list[Document]) -> list[dict[str, Any]]:
         sources = []
         for index, document in enumerate(docs, start=1):
             metadata = document.metadata or {}
@@ -501,7 +502,7 @@ class RagAgentService:
 
     async def _prepare_question(
         self, question: str
-    ) -> tuple[str, List[Dict[str, Any]], bool, str]:
+    ) -> tuple[str, list[dict[str, Any]], bool, str]:
         """对运维问题预先检索一次知识库，避免完全依赖 LLM 选工具。"""
         if not self._should_prefetch_knowledge(question):
             return question, [], False, "skipped"
@@ -606,7 +607,7 @@ class RagAgentService:
 
     async def query_stream(
         self, question: str, session_id: str
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """流式查询
 
         使用 checkpointer 自动管理消息历史，无需手动恢复/保存。

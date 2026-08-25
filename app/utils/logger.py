@@ -4,7 +4,9 @@
 """
 
 import sys
+
 from loguru import logger
+
 from app.config import config
 
 

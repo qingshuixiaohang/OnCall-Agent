@@ -13,10 +13,10 @@
 4. 最终报告由 Supervisor 自己生成，而不是交给某个 Specialist
 """
 
-from datetime import datetime, timezone
-from typing import Any, Dict, List
-
+from datetime import UTC, datetime
 from textwrap import dedent
+from typing import Any
+
 from langchain_core.prompts import ChatPromptTemplate
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -36,19 +36,19 @@ SUPPORTED_SPECIALISTS = {
 class RouteDecision(BaseModel):
     """路由决策输出格式"""
 
-    specialists: List[str] = Field(
+    specialists: list[str] = Field(
         description="需要调用的 Specialist 列表，可选值: log_analyzer, monitor_expert, knowledge_retriever"
     )
     reason: str = Field(description="路由决策理由")
-    tasks: List[str] = Field(description="对应的任务计划")
+    tasks: list[str] = Field(description="对应的任务计划")
 
 
 # ========== Supervisor 节点函数 ==========
 
-async def supervisor_node(state: MultiAgentState) -> Dict[str, Any]:
+async def supervisor_node(state: MultiAgentState) -> dict[str, Any]:
     """
     Supervisor 主节点：分析任务并生成路由决策
-    
+
     这是整个 Multi-Agent 系统的"大脑"，负责任务分解和 Specialist 选择。
     """
     logger.info("=== Supervisor：分析任务并路由 ===")
@@ -179,4 +179,4 @@ async def supervisor_node(state: MultiAgentState) -> Dict[str, Any]:
 
 def _now_iso() -> str:
     """返回当前 UTC 时间的 ISO 格式字符串"""
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()

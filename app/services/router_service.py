@@ -3,7 +3,8 @@
 负责编排 Router Agent 和下游 Agent，将不同目标的事件流统一输出。
 """
 
-from typing import AsyncGenerator, Dict, Any
+from collections.abc import AsyncGenerator
+from typing import Any
 
 from loguru import logger
 
@@ -25,7 +26,7 @@ class RouterService:
         self,
         question: str,
         session_id: str
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """路由并流式输出
 
         Args:
@@ -66,12 +67,12 @@ class RouterService:
             async for event in self._stream_rag(routed_question, session_id):
                 yield event
 
-    async def _stream_rag(self, question: str, session_id: str) -> AsyncGenerator[Dict[str, Any], None]:
+    async def _stream_rag(self, question: str, session_id: str) -> AsyncGenerator[dict[str, Any], None]:
         """流式转发 RAG Agent 输出"""
         async for event in rag_agent_service.query_stream(question, session_id=session_id):
             yield event
 
-    async def _stream_aiops(self, question: str, session_id: str) -> AsyncGenerator[Dict[str, Any], None]:
+    async def _stream_aiops(self, question: str, session_id: str) -> AsyncGenerator[dict[str, Any], None]:
         """流式转发 AIOps 输出，并统一为 content/done/error"""
         async for event in aiops_service.diagnose(session_id=session_id, user_input=question):
             normalized = self._normalize_aiops_event(event)
@@ -80,7 +81,7 @@ class RouterService:
                 if normalized.get("type") == "done":
                     return
 
-    async def _stream_multi_agent(self, question: str, session_id: str) -> AsyncGenerator[Dict[str, Any], None]:
+    async def _stream_multi_agent(self, question: str, session_id: str) -> AsyncGenerator[dict[str, Any], None]:
         """流式转发 Multi-Agent 输出，并统一为 content/done/error"""
         async for event in multi_agent_service.execute(user_input=question, session_id=session_id):
             normalized = self._normalize_multi_agent_event(event)
@@ -89,7 +90,7 @@ class RouterService:
                 if normalized.get("type") == "done":
                     return
 
-    def _normalize_aiops_event(self, event: Dict[str, Any]) -> Dict[str, Any] | None:
+    def _normalize_aiops_event(self, event: dict[str, Any]) -> dict[str, Any] | None:
         """将 AIOps 事件标准化为 content/done/error"""
         event_type = event.get("type")
 
@@ -136,7 +137,7 @@ class RouterService:
         # 其他类型忽略
         return None
 
-    def _normalize_multi_agent_event(self, event: Dict[str, Any]) -> Dict[str, Any] | None:
+    def _normalize_multi_agent_event(self, event: dict[str, Any]) -> dict[str, Any] | None:
         """将 Multi-Agent 事件标准化为 content/done/error"""
         event_type = event.get("type")
 

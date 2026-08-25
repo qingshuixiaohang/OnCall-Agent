@@ -9,7 +9,6 @@
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from langchain_community.document_loaders import Docx2txtLoader, PyPDFLoader
 from langchain_core.documents import Document
@@ -89,8 +88,8 @@ class DocumentSplitterService:
         self,
         content: str,
         file_path: str = "",
-        extra_metadata: Optional[Dict[str, str]] = None,
-    ) -> List[Document]:
+        extra_metadata: dict[str, str] | None = None,
+    ) -> list[Document]:
         """
         智能分割文档 (根据文件类型选择分割器)
 
@@ -117,8 +116,8 @@ class DocumentSplitterService:
         self,
         content: str,
         file_path: str = "",
-        extra_metadata: Optional[Dict[str, str]] = None,
-    ) -> List[Document]:
+        extra_metadata: dict[str, str] | None = None,
+    ) -> list[Document]:
         """
         分割 Markdown 文档 (两阶段分割 + 合并小片段)
 
@@ -167,8 +166,8 @@ class DocumentSplitterService:
         self,
         content: str,
         file_path: str = "",
-        extra_metadata: Optional[Dict[str, str]] = None,
-    ) -> List[Document]:
+        extra_metadata: dict[str, str] | None = None,
+    ) -> list[Document]:
         """
         分割纯文本文档
 
@@ -306,8 +305,8 @@ class DocumentSplitterService:
             raise RuntimeError(f"Docx 文本提取失败: {e}") from e
 
     def _merge_small_chunks(
-        self, documents: List[Document], min_size: int = 300
-    ) -> List[Document]:
+        self, documents: list[Document], min_size: int = 300
+    ) -> list[Document]:
         """
         合并太小的分片
 

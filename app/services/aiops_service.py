@@ -10,15 +10,16 @@
 - 重启后从最后一个 checkpoint 恢复，可精确续接执行
 """
 
-from typing import AsyncGenerator, Dict, Any
+from collections.abc import AsyncGenerator
+from typing import Any
 from uuid import uuid4
-from langgraph.graph import StateGraph, END
+
+from langgraph.graph import END, StateGraph
 from loguru import logger
 
-from app.agent.aiops import PlanExecuteState, planner, executor, replanner
+from app.agent.aiops import PlanExecuteState, executor, planner, replanner
 from app.core.checkpointer import get_checkpointer, thread_id_with_prefix
 from app.core.mem0_manager import asearch_memory, schedule_memory_save
-
 
 # 节点名称常量
 NODE_PLANNER = "planner"
@@ -91,7 +92,7 @@ class AIOpsService:
         session_id: str = "default",
         run_id: str | None = None,
         resume: bool = False,
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """执行 Plan-Execute-Replan 流程（统一 checkpointer 持久化）
 
         Args:
@@ -213,7 +214,7 @@ class AIOpsService:
         user_input: str | None = None,
         run_id: str | None = None,
         resume: bool = False,
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """AIOps 诊断接口（支持自然语言自定义输入）"""
         from textwrap import dedent
 
@@ -265,7 +266,7 @@ class AIOpsService:
             else:
                 yield event
 
-    async def get_history(self, session_id: str, run_id: str) -> Dict[str, Any] | None:
+    async def get_history(self, session_id: str, run_id: str) -> dict[str, Any] | None:
         """从 Checkpointer 重建单 Agent 诊断时间线。"""
         graph = await self._get_graph()
         thread_id = thread_id_with_prefix(f"{session_id}-{run_id}", "aiops")
@@ -277,7 +278,7 @@ class AIOpsService:
         if not snapshots:
             return None
 
-        events: list[Dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
         seen_plans = set()
         processed_steps = 0
         response = ""
@@ -323,7 +324,7 @@ class AIOpsService:
     # 事件格式化
     # ------------------------------------------------------------------
 
-    def _format_planner_event(self, state: Dict | None) -> Dict:
+    def _format_planner_event(self, state: dict | None) -> dict:
         if not state:
             return {"type": "status", "stage": "planner", "message": "规划节点执行中"}
         plan = state.get("plan", [])
@@ -334,7 +335,7 @@ class AIOpsService:
             "plan": plan
         }
 
-    def _format_executor_event(self, state: Dict | None) -> Dict:
+    def _format_executor_event(self, state: dict | None) -> dict:
         if not state:
             return {"type": "status", "stage": "executor", "message": "执行节点运行中"}
         plan = state.get("plan", [])
@@ -352,7 +353,7 @@ class AIOpsService:
             }
         return {"type": "status", "stage": "executor", "message": "开始执行步骤"}
 
-    def _format_replanner_event(self, state: Dict | None) -> Dict:
+    def _format_replanner_event(self, state: dict | None) -> dict:
         if not state:
             return {"type": "status", "stage": "replanner", "message": "评估节点运行中"}
         response = state.get("response", "")

@@ -10,13 +10,13 @@
 - 不设 agent_id 隔离：运维经验不分入口，学到就是赚到
 """
 
+import asyncio
 import hashlib
 import platform
-import asyncio
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -170,12 +170,12 @@ async def asearch_memory(query: str, limit: int = 3) -> str:
             asyncio.to_thread(search_memory, query, limit),
             timeout=5,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("Mem0 检索超时（5 秒），跳过本次记忆注入")
         return ""
 
 
-def save_memory(messages: List[Dict[str, str]], metadata: Optional[Dict] = None):
+def save_memory(messages: list[dict[str, str]], metadata: dict | None = None):
     """保存对话到 Mem0 长期记忆
 
     什么时机存：
@@ -204,19 +204,19 @@ def save_memory(messages: List[Dict[str, str]], metadata: Optional[Dict] = None)
 
 
 async def asave_memory(
-    messages: List[Dict[str, str]], metadata: Optional[Dict] = None
+    messages: list[dict[str, str]], metadata: dict | None = None
 ) -> None:
     """异步调用同步 Mem0 写入，避免阻塞请求处理。"""
     await asyncio.to_thread(save_memory, messages, metadata)
 
 
 async def _save_memory_background(
-    messages: List[Dict[str, str]], metadata: Optional[Dict] = None
+    messages: list[dict[str, str]], metadata: dict | None = None
 ) -> None:
     try:
         timeout = mem0_config.mem0_save_timeout
         await asyncio.wait_for(asave_memory(messages, metadata), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning(
             "Mem0 后台写入等待超过 {} 秒，底层线程仍可能继续执行，不影响主流程",
             mem0_config.mem0_save_timeout,
@@ -226,7 +226,7 @@ async def _save_memory_background(
 
 
 def schedule_memory_save(
-    messages: List[Dict[str, str]], metadata: Optional[Dict] = None
+    messages: list[dict[str, str]], metadata: dict | None = None
 ) -> None:
     """将 Mem0 写入放入后台，避免阻塞 SSE/HTTP 响应。"""
     task = asyncio.create_task(_save_memory_background(messages, metadata))
@@ -242,5 +242,5 @@ async def flush_memory_tasks(timeout: float = 5) -> None:
     pending = list(_MEMORY_TASKS)
     try:
         await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("应用关闭时仍有 Mem0 写入未完成，已跳过等待")

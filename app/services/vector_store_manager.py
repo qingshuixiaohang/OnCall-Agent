@@ -1,6 +1,5 @@
 """向量存储管理器 - 封装 Milvus VectorStore 操作"""
 
-from typing import List, Optional
 
 from langchain_core.documents import Document
 from langchain_milvus import Milvus
@@ -10,7 +9,6 @@ from app.config import config
 from app.core.milvus_client import milvus_manager
 from app.services.vector_embedding_service import vector_embedding_service
 
-
 # 统一使用 biz collection
 COLLECTION_NAME = "biz"
 
@@ -19,10 +17,17 @@ class VectorStoreManager:
     """向量存储管理器"""
 
     def __init__(self):
-        """初始化向量存储管理器"""
+        """初始化向量存储管理器（懒连接，首次使用时才连接 Milvus）"""
         self.vector_store = None
         self.collection_name = COLLECTION_NAME
-        self._initialize_vector_store()
+
+    def _get_or_initialize_vector_store(self) -> Milvus:
+        """懒加载：首次使用时才连接 Milvus，之后复用。"""
+        if self.vector_store is None:
+            self._initialize_vector_store()
+        if self.vector_store is None:
+            raise RuntimeError("VectorStore 初始化失败")
+        return self.vector_store
 
     def _initialize_vector_store(self):
         """初始化 Milvus VectorStore"""
@@ -61,7 +66,7 @@ class VectorStoreManager:
             logger.error(f"VectorStore 初始化失败: {e}")
             raise
 
-    def add_documents(self, documents: List[Document], ids: Optional[List[str]] = None) -> List[str]:
+    def add_documents(self, documents: list[Document], ids: list[str] | None = None) -> list[str]:
         """
         批量添加文档到向量存储（自动批量向量化）
 
@@ -86,7 +91,8 @@ class VectorStoreManager:
 
             # LangChain Milvus 的 add_documents 会自动调用 embedding_function
             # 并进行批量处理，性能更好
-            result_ids = self.vector_store.add_documents(documents, ids=document_ids)
+            vector_store = self._get_or_initialize_vector_store()
+            result_ids = vector_store.add_documents(documents, ids=document_ids)
 
             elapsed = time.time() - start_time
             logger.info(
@@ -132,11 +138,11 @@ class VectorStoreManager:
         Returns:
             Milvus: VectorStore 实例
         """
-        return self.vector_store
+        return self._get_or_initialize_vector_store()
 
     def similarity_search(
-        self, query: str, k: int = 3, expr: Optional[str] = None
-    ) -> List[Document]:
+        self, query: str, k: int = 3, expr: str | None = None
+    ) -> list[Document]:
         """
         相似度搜索
 
@@ -148,7 +154,8 @@ class VectorStoreManager:
             List[Document]: 相关文档列表
         """
         try:
-            docs = self.vector_store.similarity_search(query, k=k, expr=expr)
+            vector_store = self._get_or_initialize_vector_store()
+            docs = vector_store.similarity_search(query, k=k, expr=expr)
             logger.debug(f"相似度搜索完成: query='{query}', 结果数={len(docs)}")
             return docs
         except Exception as e:

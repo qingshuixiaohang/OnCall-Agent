@@ -1,6 +1,5 @@
 """文档相关数据模型"""
 
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -12,7 +11,7 @@ class DocumentChunk(BaseModel):
     start_index: int = Field(..., description="分片在原文档中的起始位置")
     end_index: int = Field(..., description="分片在原文档中的结束位置")
     chunk_index: int = Field(..., description="分片索引（从0开始）")
-    title: Optional[str] = Field(None, description="分片所属章节标题")
+    title: str | None = Field(None, description="分片所属章节标题")
 
     class Config:
         """Pydantic 配置"""

@@ -4,9 +4,10 @@
 """
 
 import json
+
 from fastapi import APIRouter
-from sse_starlette.sse import EventSourceResponse
 from loguru import logger
+from sse_starlette.sse import EventSourceResponse
 
 from app.models.aiops import AIOpsRequest
 from app.services.router_service import router_service

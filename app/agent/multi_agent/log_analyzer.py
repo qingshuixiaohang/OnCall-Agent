@@ -12,16 +12,13 @@
 4. P2 优化：限制日志展示条数为 20 条，prompt 限制输出长度
 """
 
-from typing import Any, Dict, List, Optional
-import json
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.prompts import ChatPromptTemplate
+from typing import Any
+
 from loguru import logger
 
 from app.agent.mcp_client import get_mcp_client_with_retry
-from app.agent.multi_agent.state import MultiAgentState
 from app.agent.multi_agent.base_specialist import BaseSpecialist
-
+from app.agent.multi_agent.state import MultiAgentState
 
 # LogAnalyzer 可以使用的工具子集（只给日志相关的，不给监控工具）
 LOG_TOOLS_NAMES = [
@@ -79,7 +76,7 @@ class LogAnalyzer(BaseSpecialist):
             description="分析系统日志，识别错误和异常模式（自主选工具）",
         )
 
-    async def _execute(self, state: MultiAgentState) -> Dict[str, Any]:
+    async def _execute(self, state: MultiAgentState) -> dict[str, Any]:
         user_input = state.get("user_input", "")
         mcp_client = await get_mcp_client_with_retry()
         all_mcp_tools = await mcp_client.get_tools()

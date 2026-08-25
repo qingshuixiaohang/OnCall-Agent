@@ -12,15 +12,13 @@
 4. P2 优化：限制指标展示条数为 5 条，prompt 限制输出长度
 """
 
-from typing import Any, Dict, List, Optional
-import json
-from datetime import datetime, timedelta
+from typing import Any
+
 from loguru import logger
 
 from app.agent.mcp_client import get_mcp_client_with_retry
-from app.agent.multi_agent.state import MultiAgentState
 from app.agent.multi_agent.base_specialist import BaseSpecialist
-
+from app.agent.multi_agent.state import MultiAgentState
 
 # MonitorExpert 可以使用的工具子集
 MONITOR_TOOLS_NAMES = [
@@ -66,7 +64,7 @@ class MonitorExpert(BaseSpecialist):
             description="分析系统监控指标，检测资源异常（自主选工具）",
         )
 
-    async def _execute(self, state: MultiAgentState) -> Dict[str, Any]:
+    async def _execute(self, state: MultiAgentState) -> dict[str, Any]:
         user_input = state.get("user_input", "")
         mcp_client = await get_mcp_client_with_retry()
         all_mcp_tools = await mcp_client.get_tools()

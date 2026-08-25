@@ -2,24 +2,25 @@
 AIOps 请求和响应模型
 """
 
-from typing import Optional, List, Dict, Any
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
 class AIOpsRequest(BaseModel):
     """AIOps 诊断请求"""
 
-    session_id: Optional[str] = Field(
+    session_id: str | None = Field(
         default="default",
         description="会话ID，用于追踪诊断历史"
     )
 
-    question: Optional[str] = Field(
+    question: str | None = Field(
         default=None,
         description="用户自定义的诊断问题（自然语言）。例如：'诊断 data-sync-service 的 CPU 过高问题'。如果不提供，将执行默认的全系统告警诊断"
     )
 
-    run_id: Optional[str] = Field(
+    run_id: str | None = Field(
         default=None,
         description="可选的诊断运行标识；未提供时由服务端生成",
     )
@@ -44,7 +45,7 @@ class AlertInfo(BaseModel):
     severity: str
     instance: str
     duration: str
-    description: Optional[str] = None
+    description: str | None = None
 
 
 class DiagnosisResponse(BaseModel):
@@ -52,7 +53,7 @@ class DiagnosisResponse(BaseModel):
 
     code: int = 200
     message: str = "success"
-    data: Dict[str, Any]
+    data: dict[str, Any]
 
     class Config:
         json_schema_extra = {

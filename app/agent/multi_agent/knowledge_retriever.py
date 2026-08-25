@@ -12,13 +12,14 @@
 4. 移除旧版硬编码的假 confidence 值（0.9/0.3），改为基于实际文档数量的简单判断
 """
 
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any
+
 from langchain_core.documents import Document
 from loguru import logger
 
-from app.tools import retrieve_knowledge
-from app.agent.multi_agent.state import MultiAgentState
 from app.agent.multi_agent.base_specialist import BaseSpecialist
+from app.agent.multi_agent.state import MultiAgentState
+from app.tools import retrieve_knowledge
 
 
 class KnowledgeRetriever(BaseSpecialist):
@@ -30,7 +31,7 @@ class KnowledgeRetriever(BaseSpecialist):
             description="从知识库检索相关运维经验和最佳实践",
         )
 
-    async def _execute(self, state: MultiAgentState) -> Dict[str, Any]:
+    async def _execute(self, state: MultiAgentState) -> dict[str, Any]:
         user_input = state.get("user_input", "")
 
         try:
@@ -75,7 +76,7 @@ class KnowledgeRetriever(BaseSpecialist):
                 "completed_tasks": [f"完成 {self.name} 检索（降级）"],
             }
 
-    def _normalize_result(self, result: Any) -> Tuple[str, List[Document]]:
+    def _normalize_result(self, result: Any) -> tuple[str, list[Document]]:
         """兼容工具返回格式
 
         retrieve_knowledge 使用 response_format="content_and_artifact"，

@@ -9,7 +9,7 @@
 
 import json
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -28,7 +28,7 @@ class BaseSpecialist(ABC):
     def __init__(self, name: str, description: str):
         self.name = name
         self.description = description
-        self._llm: Optional[BaseChatModel] = None  # 延迟创建
+        self._llm: BaseChatModel | None = None  # 延迟创建
 
     @property
     def llm(self) -> BaseChatModel:
@@ -41,11 +41,11 @@ class BaseSpecialist(ABC):
         return self._llm
 
     @abstractmethod
-    async def _execute(self, state: MultiAgentState) -> Dict[str, Any]:
+    async def _execute(self, state: MultiAgentState) -> dict[str, Any]:
         """子类必须实现：Specialist 的核心执行逻辑"""
         ...
 
-    async def run(self, state: MultiAgentState) -> Dict[str, Any]:
+    async def run(self, state: MultiAgentState) -> dict[str, Any]:
         """执行 Specialist 的完整流程（统一异常包装 + Mem0 记忆注入）
 
         注意：Mem0 记忆注入统一在这里完成。
@@ -84,10 +84,10 @@ class BaseSpecialist(ABC):
     async def run_with_tools(
         self,
         task: str,
-        tools: List[BaseTool],
+        tools: list[BaseTool],
         system_prompt: str,
         max_steps: int = 2,
-    ) -> tuple[str, List[Dict[str, Any]]]:
+    ) -> tuple[str, list[dict[str, Any]]]:
         """有界 ReAct 循环：让 LLM 自主选工具并执行
 
         这是一个通用的工具调用辅助方法，Specialist 不再硬编码调哪个工具，
@@ -110,11 +110,11 @@ class BaseSpecialist(ABC):
         llm_with_tools = self.llm.bind_tools(tools)
         tool_node = ToolNode(tools)
 
-        messages: List = [
+        messages: list = [
             SystemMessage(content=system_prompt),
             HumanMessage(content=task),
         ]
-        tool_traces: List[Dict[str, Any]] = []
+        tool_traces: list[dict[str, Any]] = []
 
         for step in range(max_steps):
             response = await llm_with_tools.ainvoke(messages)
@@ -168,9 +168,9 @@ class BaseSpecialist(ABC):
 
     async def get_tools_by_names(
         self,
-        all_tools: List[BaseTool],
-        names: List[str],
-    ) -> List[BaseTool]:
+        all_tools: list[BaseTool],
+        names: list[str],
+    ) -> list[BaseTool]:
         """从全部工具中筛选出本 Specialist 需要的工具子集"""
         tool_map = {tool.name: tool for tool in all_tools}
         return [tool_map[name] for name in names if name in tool_map]

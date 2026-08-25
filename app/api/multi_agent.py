@@ -4,12 +4,13 @@
 """
 
 import json
-from fastapi import APIRouter
-from sse_starlette.sse import EventSourceResponse
-from loguru import logger
 
-from app.models.aiops import AIOpsRequest
+from fastapi import APIRouter
+from loguru import logger
+from sse_starlette.sse import EventSourceResponse
+
 from app.agent.multi_agent import multi_agent_service
+from app.models.aiops import AIOpsRequest
 
 router = APIRouter()
 

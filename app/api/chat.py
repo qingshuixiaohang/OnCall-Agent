@@ -4,12 +4,14 @@
 """
 
 import json
+
 from fastapi import APIRouter, HTTPException
-from sse_starlette.sse import EventSourceResponse
-from app.models.request import ChatRequest, ClearRequest
-from app.models.response import SessionInfoResponse, ApiResponse
-from app.services.rag_agent_service import rag_agent_service
 from loguru import logger
+from sse_starlette.sse import EventSourceResponse
+
+from app.models.request import ChatRequest, ClearRequest
+from app.models.response import ApiResponse, SessionInfoResponse
+from app.services.rag_agent_service import rag_agent_service
 
 router = APIRouter()
 

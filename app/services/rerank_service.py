@@ -3,7 +3,6 @@
 使用 httpx 直接发送 HTTP 请求，绕开 OpenAI SDK 封装的不确定性。
 """
 
-from typing import List
 
 from langchain_core.documents import Document
 from loguru import logger
@@ -37,7 +36,7 @@ class RerankService:
             f"retrieval_k={self.retrieval_k}, top_k={self.top_k}"
         )
 
-    def rerank(self, query: str, documents: List[Document]) -> List[Document]:
+    def rerank(self, query: str, documents: list[Document]) -> list[Document]:
         if not documents:
             return documents
 
@@ -68,7 +67,7 @@ class RerankService:
                 results, key=lambda r: r.get("relevance_score", 0.0), reverse=True
             )
 
-            reranked_docs: List[Document] = []
+            reranked_docs: list[Document] = []
             for item in sorted_results[: self.top_k]:
                 idx = item.get("index", 0)
                 score = item.get("relevance_score", 0.0)
@@ -89,7 +88,7 @@ class RerankService:
             logger.error(f"RerankService: 重排异常: {e}", exc_info=True)
             raise RuntimeError(f"文档重排失败: {e}") from e
 
-    def _call_siliconflow(self, query: str, documents: List[str]) -> List[dict]:
+    def _call_siliconflow(self, query: str, documents: list[str]) -> list[dict]:
         """SiliconFlow Rerank API（OpenAI 兼容 /rerank）"""
         import httpx
 
@@ -120,7 +119,7 @@ class RerankService:
             for i, r in enumerate(results)
         ]
 
-    def _call_dashscope(self, query: str, documents: List[str]) -> List[dict]:
+    def _call_dashscope(self, query: str, documents: list[str]) -> list[dict]:
         """DashScope Rerank API（阿里云百炼专用格式）"""
         import httpx
 

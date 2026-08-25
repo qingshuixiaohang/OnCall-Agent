@@ -20,15 +20,15 @@
 - 升级后：统一 checkpointer（SQLite/PG）= 一套机制，LangGraph 原生支持
 """
 
-from typing import Any, Optional
+from typing import Any
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from loguru import logger
 
 from app.config import config
 
-_CHECKPOINTER: Optional[BaseCheckpointSaver] = None
-_CONN: Optional[Any] = None  # aiosqlite.Connection 或 asyncpg.Connection
+_CHECKPOINTER: BaseCheckpointSaver | None = None
+_CONN: Any | None = None  # aiosqlite.Connection 或 asyncpg.Connection
 
 
 async def setup_checkpointer() -> BaseCheckpointSaver:

@@ -19,22 +19,25 @@
 - 每次诊断使用独立 run_id，避免新任务复用旧状态
 """
 
+from collections.abc import AsyncGenerator
 from textwrap import dedent
-from typing import AsyncGenerator, Dict, Any, List, Union
+from typing import Any, Dict, List, Union
 from uuid import uuid4
+
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.constants import Send
 from langgraph.graph import END, START, StateGraph
 from loguru import logger
 
-from app.agent.multi_agent.state import MultiAgentState
-from app.agent.multi_agent.supervisor import supervisor_node
+from app.agent.multi_agent.knowledge_retriever import KnowledgeRetriever
 from app.agent.multi_agent.log_analyzer import LogAnalyzer
 from app.agent.multi_agent.monitor_expert import MonitorExpert
-from app.agent.multi_agent.knowledge_retriever import KnowledgeRetriever
+from app.agent.multi_agent.state import MultiAgentState
+from app.agent.multi_agent.supervisor import supervisor_node
 from app.core.checkpointer import get_checkpointer, thread_id_with_prefix
 from app.core.llm_factory import llm_factory
 from app.core.mem0_manager import schedule_memory_save
+
 
 class MultiAgentService:
     """Multi-Agent 服务
@@ -71,7 +74,7 @@ class MultiAgentService:
 
         workflow.add_edge(START, "supervisor")
 
-        def route_from_supervisor(state: MultiAgentState) -> List[Union[str, Send]]:
+        def route_from_supervisor(state: MultiAgentState) -> list[str | Send]:
             """根据路由决策并行触发 Specialist"""
             routing = state.get("routing", [])
             if not routing:
@@ -122,7 +125,7 @@ class MultiAgentService:
             logger.info("Multi-Agent 主图已编译（含 checkpointer 持久化）")
         return self._graph
 
-    async def _aggregate_results(self, state: MultiAgentState) -> Dict[str, Any]:
+    async def _aggregate_results(self, state: MultiAgentState) -> dict[str, Any]:
         """聚合节点：收集所有 Specialist 的结果，用 LLM 做跨专家综合分析
 
         与旧版区别：
@@ -141,7 +144,7 @@ class MultiAgentService:
         session_id: str = "default",
         run_id: str | None = None,
         resume: bool = False,
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any], None]:
         """执行 Multi-Agent 流程（统一 checkpointer 持久化）"""
         graph = await self._get_graph()
         if resume and not run_id:
@@ -256,7 +259,7 @@ class MultiAgentService:
         # 降级：字符串拼接
         return self._fallback_report(log_summary, monitor_summary, knowledge_context)
 
-    async def get_history(self, session_id: str, run_id: str) -> Dict[str, Any] | None:
+    async def get_history(self, session_id: str, run_id: str) -> dict[str, Any] | None:
         """从 Checkpointer 重建 Multi-Agent 诊断时间线。"""
         graph = await self._get_graph()
         thread_id = thread_id_with_prefix(f"{session_id}-{run_id}", "multi")
@@ -265,7 +268,7 @@ class MultiAgentService:
             return None
 
         state = snapshot.values
-        events: list[Dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
         routing = (state.get("routing") or [])[-1:]
         if routing:
             route = routing[0]

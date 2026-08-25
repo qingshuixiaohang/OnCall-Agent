@@ -5,7 +5,7 @@
 
 import json
 import re
-from typing import Dict, Any
+from typing import Any, Dict
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from loguru import logger
@@ -16,7 +16,7 @@ from app.core.llm_factory import llm_factory
 
 class RouterAgent:
     """路由 Agent
-    
+
     只做一次 LLM 分类决策，不执行任何工具调用。
     输出标准化的路由决策 JSON。
     """
@@ -29,7 +29,7 @@ class RouterAgent:
         )
         logger.info("Router Agent 初始化完成")
 
-    async def route(self, user_input: str) -> Dict[str, Any]:
+    async def route(self, user_input: str) -> dict[str, Any]:
         """根据用户输入进行路由决策
 
         Args:
@@ -68,7 +68,7 @@ class RouterAgent:
                 "question": user_input
             }
 
-    def _parse_routing(self, content: str, fallback_input: str) -> Dict[str, Any]:
+    def _parse_routing(self, content: str, fallback_input: str) -> dict[str, Any]:
         """解析 LLM 输出的路由决策
 
         Args:
@@ -116,7 +116,7 @@ class RouterAgent:
             "question": fallback_input
         }
 
-    def _normalize(self, parsed: Dict[str, Any], fallback_input: str) -> Dict[str, Any]:
+    def _normalize(self, parsed: dict[str, Any], fallback_input: str) -> dict[str, Any]:
         """标准化路由决策
 
         Args:

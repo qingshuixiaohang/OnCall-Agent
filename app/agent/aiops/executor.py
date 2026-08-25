@@ -11,22 +11,23 @@ LangSmith 也能看到每一步的细节，而不是 executor 黑盒。
 """
 
 import json
-from typing import Dict, Any, Optional
+from typing import Any
+
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.prebuilt import ToolNode
 from loguru import logger
 
+from app.agent.mcp_client import get_mcp_client_with_retry
 from app.core.llm_factory import llm_factory
 from app.tools import get_current_time, retrieve_knowledge
-from app.agent.mcp_client import get_mcp_client_with_retry
-from .state import PlanExecuteState
 
+from .state import PlanExecuteState
 
 # ============================================================================
 # 第一级：参数预校验（纯 Python，不调 LLM）
 # ============================================================================
 
-def validate_tool_params(tool_name: str, params: dict) -> Optional[str]:
+def validate_tool_params(tool_name: str, params: dict) -> str | None:
     """校验工具参数，返回错误信息或 None（表示参数OK）"""
 
     if tool_name == "search_log":
@@ -53,7 +54,7 @@ def validate_tool_params(tool_name: str, params: dict) -> Optional[str]:
 # 第二级：结果质量检查（纯 Python，不调 LLM）
 # ============================================================================
 
-def check_tool_result(tool_name: str, result: dict) -> Optional[str]:
+def check_tool_result(tool_name: str, result: dict) -> str | None:
     """检查结果质量，返回错误信息或 None（表示结果OK）"""
 
     if isinstance(result, str):
@@ -104,7 +105,7 @@ SYSTEM_PROMPT = """你是一个负责执行具体任务步骤的助手。
 - 专注于当前步骤，不要考虑其他任务"""
 
 
-async def executor(state: PlanExecuteState) -> Dict[str, Any]:
+async def executor(state: PlanExecuteState) -> dict[str, Any]:
     """
     执行节点：执行计划中的下一个步骤（单次 LLM 调用）
 
@@ -156,7 +157,7 @@ async def executor(state: PlanExecuteState) -> Dict[str, Any]:
         result = None
         last_tool_name = None
         last_tool_call = None
-        retry_history: list[Dict[str, str]] = []
+        retry_history: list[dict[str, str]] = []
 
         for attempt in range(1, MAX_RETRIES + 1):
             logger.info(f"第 {attempt}/{MAX_RETRIES} 次尝试")
@@ -231,7 +232,7 @@ async def executor(state: PlanExecuteState) -> Dict[str, Any]:
                 "suggestion": "建议 Replanner: 跳过此步骤或改用替代工具",
             }, ensure_ascii=False)
 
-        logger.info(f"步骤执行完成")
+        logger.info("步骤执行完成")
 
         return {
             "plan": plan[1:],

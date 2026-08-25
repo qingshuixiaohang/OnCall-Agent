@@ -3,20 +3,21 @@
 主应用程序，配置路由、中间件、静态文件等
 """
 
+import os
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from contextlib import asynccontextmanager
-import os
-
-from app.config import config
+from fastapi.staticfiles import StaticFiles
 from loguru import logger
-from app.api import chat, health, file, aiops, session, multi_agent, router
-from app.core.milvus_client import milvus_manager
-from app.core.checkpointer import setup_checkpointer, close_checkpointer
+
+from app.api import aiops, chat, file, health, multi_agent, router, session
+from app.config import config
+from app.core.checkpointer import close_checkpointer, setup_checkpointer
 from app.core.llm_factory import llm_factory
 from app.core.mem0_manager import flush_memory_tasks
+from app.core.milvus_client import milvus_manager
 
 
 @asynccontextmanager

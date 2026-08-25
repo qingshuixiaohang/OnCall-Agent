@@ -10,17 +10,16 @@
 4. storage_health 改为 checkpointer 健康检查（通过数据库连接状态判断）
 """
 
-from typing import Optional
+import re
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 from loguru import logger
-import re
 
-from app.core.checkpointer import get_checkpointer, thread_id_with_prefix
+from app.agent.multi_agent import multi_agent_service
+from app.core.checkpointer import get_checkpointer
 from app.services.aiops_service import aiops_service
 from app.services.rag_agent_service import rag_agent_service
-from app.agent.multi_agent import multi_agent_service
 
 router = APIRouter()
 
@@ -134,7 +133,7 @@ async def get_session_state(session_id: str):
 async def get_session_history(
     session_id: str,
     mode: str = Query("rag", pattern="^(rag|aiops|multi)$"),
-    run_id: Optional[str] = Query(None),
+    run_id: str | None = Query(None),
 ):
     """读取指定模式的会话历史或诊断时间线。"""
     try:
@@ -227,7 +226,7 @@ def _public_session_id(thread_id: str) -> str:
     return record["session_id"] if record else thread_id
 
 
-def _session_record(thread_id: str, checkpoint_tuple=None) -> Optional[dict]:
+def _session_record(thread_id: str, checkpoint_tuple=None) -> dict | None:
     """将内部 thread_id 转成前端可恢复的记录。"""
     prefixes = {
         "rag-": "rag",
