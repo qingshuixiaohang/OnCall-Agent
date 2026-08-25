@@ -56,6 +56,7 @@ dev = [
     "pre-commit>=3.6.0",
     "ipython>=8.20.0",
     "ipdb>=0.13.13",
+    "langfuse>=4.0.0",  # 观测/追踪（可选，由 config.langfuse_enabled 控制）
 ]
 eval = [
     "datasets>=2.14.0",
