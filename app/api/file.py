@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 
 from app.config import resolve_project_path
-from app.services.vector_index_service import vector_index_service
+from app.services.rag_pipeline import RAGPipeline
 
 router = APIRouter()
 
@@ -86,10 +86,8 @@ async def upload_file(
         # 5. 自动创建向量索引
         try:
             logger.info(f"开始为上传文件创建向量索引: {file_path}")
-            vector_index_service.index_single_file(
-                str(file_path),
-                metadata=document_metadata,
-            )
+            pipeline = RAGPipeline()
+            pipeline.ingest(str(file_path), metadata=document_metadata)
             logger.info(f"向量索引创建成功: {file_path}")
         except Exception as e:
             logger.error(f"向量索引创建失败: {file_path}, 错误: {e}")
@@ -131,7 +129,39 @@ async def index_directory(directory_path: str = None):
         logger.info(f"开始索引目录: {directory_path or 'uploads'}")
 
         # 执行索引
-        result = vector_index_service.index_directory(directory_path)
+        pipeline = RAGPipeline()
+        target = Path(directory_path).resolve() if directory_path else None
+        if not target or not target.exists():
+            raise HTTPException(status_code=400, detail=f"目录不存在: {directory_path}")
+
+        files = (
+            list(target.glob("*.txt"))
+            + list(target.glob("*.md"))
+            + list(target.glob("*.pdf"))
+            + list(target.glob("*.docx"))
+        )
+
+        total = len(files)
+        success_count = 0
+        fail_count = 0
+        failed_files: dict[str, str] = {}
+
+        for file_path in files:
+            try:
+                pipeline.ingest(str(file_path))
+                success_count += 1
+            except Exception as e:
+                fail_count += 1
+                failed_files[str(file_path)] = str(e)
+
+        result = {
+            "success": fail_count == 0,
+            "directory_path": str(target),
+            "total_files": total,
+            "success_count": success_count,
+            "fail_count": fail_count,
+            "failed_files": failed_files,
+        }
 
         return JSONResponse(
             status_code=200,

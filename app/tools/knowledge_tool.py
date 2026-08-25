@@ -1,41 +1,88 @@
-"""知识检索工具 - 从向量数据库中检索相关信息
+"""知识检索工具 - 从知识库检索相关信息（委托给 RAGPipeline）"""
 
-检索流程（两阶段）：
-1. 粗排（向量检索）：使用 Milvus 向量相似度召回 rag_retrieval_k 篇候选文档
-2. 精排（语义重排）：使用阿里云百炼重排模型筛选出最相关的 rag_top_k 篇文档
-
-这样做的优势：
-- 向量检索速度快但语义理解有限，多召回一些候选
-- 重排模型精度高，能准确判断文档与查询的相关性
-- 最终返回给 LLM 的文档质量显著提升
-"""
-
-from typing import Dict, List, Optional, Tuple
 
 from langchain_core.documents import Document
 from langchain_core.tools import tool
 from loguru import logger
 
 from app.config import config
-from app.services.keyword_index_service import keyword_index_service
-from app.services.rerank_service import rerank_service
-from app.services.vector_store_manager import vector_store_manager
+from app.core.observability import observation
+from app.services.rag_pipeline import rag_pipeline  # noqa: F401 – 保留导入以确保单例初始化
 
 _FILTER_FIELDS = ("service_name", "environment", "document_type")
+
+# 全局 RAGPipeline 单例
+_pipeline = None
+
+
+def _get_pipeline():
+    global _pipeline
+    if _pipeline is None:
+        from app.services.rag_pipeline import RAGPipeline
+        _pipeline = RAGPipeline()
+    return _pipeline
 
 
 @tool(response_format="content_and_artifact")
 def retrieve_knowledge(
     query: str,
-    service_name: Optional[str] = None,
-    environment: Optional[str] = None,
-    document_type: Optional[str] = None,
-) -> Tuple[str, List[Document]]:
+    service_name: str | None = None,
+    environment: str | None = None,
+    document_type: str | None = None,
+) -> tuple[str, list[Document]]:
+    """检索运维知识库，并返回上下文和结构化文档结果。"""
+    with observation(
+        name="rag-retrieval",
+        as_type="retriever",
+        input_data={
+            "query": query,
+            "filters": {
+                key: value
+                for key, value in {
+                    "service_name": service_name,
+                    "environment": environment,
+                    "document_type": document_type,
+                }.items()
+                if value
+            },
+        },
+    ) as trace:
+        result = _retrieve_knowledge_impl(
+            query=query,
+            service_name=service_name,
+            environment=environment,
+            document_type=document_type,
+        )
+        if trace:
+            context, docs = result
+            trace.update(
+                output={
+                    "document_count": len(docs),
+                    "sources": [
+                        doc.metadata.get("_file_name", "unknown")
+                        for doc in docs[:10]
+                    ],
+                    "rerank_scores": [
+                        doc.metadata.get("rerank_score", "N/A")
+                        for doc in docs[:10]
+                    ],
+                    "context_length": len(context),
+                }
+            )
+        return result
+
+
+def _retrieve_knowledge_impl(
+    query: str,
+    service_name: str | None = None,
+    environment: str | None = None,
+    document_type: str | None = None,
+) -> tuple[str, list[Document]]:
     """从知识库中检索相关信息来回答问题
 
     当用户的问题涉及专业知识、文档内容或需要参考资料时，使用此工具。
 
-    检索过程：
+    检索过程委托给 RAGPipeline：
     1. 向量检索和关键词检索分别召回候选文档
     2. 使用 RRF 合并两路结果
     3. 使用重排模型精排，并过滤低于最低相关性分数的文档
@@ -61,138 +108,50 @@ def retrieve_knowledge(
             }.items()
             if value and value.strip()
         }
-        filter_expr = _build_milvus_filter(filters)
         if filters:
             logger.info(f"知识检索应用元数据过滤: {filters}")
 
-        # ========== 阶段1: 粗排（向量检索多召回） ==========
-        retrieval_k = config.rag_retrieval_k
-        logger.info(f"阶段1 粗排: 向量检索召回 top-{retrieval_k} 篇候选文档")
-        dense_docs = vector_store_manager.similarity_search(
-            query,
-            k=retrieval_k,
-            expr=filter_expr,
-        )
-        logger.info(f"向量召回完成: {len(dense_docs)} 篇")
-
-        keyword_docs: List[Document] = []
-        if config.rag_hybrid_enabled:
-            keyword_docs = keyword_index_service.search(
-                query=query,
-                k=config.rag_keyword_k,
-                filters=filters,
-            )
-
-        docs = _merge_ranked_documents(dense_docs, keyword_docs)
-        if not docs:
-            logger.warning("未检索到相关文档")
-            return "没有找到相关信息。", []
+        pipeline = _get_pipeline()
+        context, docs = pipeline.retrieve(query, filters=filters)
 
         logger.info(
-            f"阶段1 完成: 向量={len(dense_docs)} 篇, "
-            f"关键词={len(keyword_docs)} 篇, 合并去重={len(docs)} 篇"
-        )
-
-        # ========== 阶段2: 精排（重排模型筛选） ==========
-        top_k = config.rag_top_k
-        if len(docs) > top_k:
-            logger.info(f"阶段2 精排: 使用重排模型从 {len(docs)} 篇中筛选 top-{top_k}")
-            try:
-                docs = rerank_service.rerank(query, docs)
-                logger.info(
-                    f"阶段2 完成: 精排后保留 {len(docs)} 篇, "
-                    f"分数: {[d.metadata.get('rerank_score', 'N/A') for d in docs]}"
-                )
-            except Exception as e:
-                # 不降级：重排失败直接抛出
-                logger.error(f"重排失败，终止检索: {e}")
-                raise RuntimeError(
-                    f"文档重排失败: {e}\n"
-                    f"请检查 DASHSCOPE_API_KEY 配置和重排模型 {config.rerank_model} 是否可用。"
-                ) from e
-        else:
-            logger.info(
-                f"候选文档数({len(docs)}) <= top_k({top_k})，跳过重排直接返回"
-            )
-
-        docs = _apply_rerank_threshold(docs)
-        if not docs:
-            logger.info(
-                f"所有候选文档的重排分数低于阈值 {config.rag_min_rerank_score}"
-            )
-            return "没有找到足够相关的知识信息。", []
-
-        # ========== 格式化文档为上下文 ==========
-        context = format_docs(docs)
-
-        logger.info(
-            f"检索完成: 最终返回 {len(docs)} 篇文档, "
+            f"检索完成: 返回 {len(docs)} 篇文档, "
             f"上下文长度: {len(context)} 字符"
         )
         return context, docs
-
-    except RuntimeError:
-        # 重排失败（已知错误），直接向上传播
-        raise
 
     except Exception as e:
         logger.error(f"知识检索工具调用失败: {e}")
         return f"检索知识时发生错误: {str(e)}", []
 
 
-def format_docs(docs: List[Document]) -> str:
-    """
-    格式化文档列表为上下文文本
-
-    Args:
-        docs: 文档列表
-
-    Returns:
-        str: 格式化的上下文文本
-    """
+def format_docs(docs: list[Document]) -> str:
+    """格式化文档列表为上下文文本（保留供外部使用）。"""
     formatted_parts = []
-
     for i, doc in enumerate(docs, 1):
-        # 提取元数据
         metadata = doc.metadata
         source = metadata.get("_file_name", "未知来源")
-
-        # 提取标题信息 (如果有)
-        headers = []
-        for key in ["h1", "h2", "h3"]:
-            if key in metadata and metadata[key]:
-                headers.append(metadata[key])
-
+        headers = [
+            str(metadata[key])
+            for key in ("h1", "h2", "h3")
+            if metadata.get(key)
+        ]
         header_str = " > ".join(headers) if headers else ""
-
-        # 构建格式化文本
         formatted = f"【参考资料 {i}】"
         if header_str:
             formatted += f"\n标题: {header_str}"
         formatted += f"\n来源: {source}"
-
-        # 如果有重排分数，添加相关性标注（便于 LLM 判断文档价值）
         rerank_score = metadata.get("rerank_score")
         if rerank_score is not None:
             relevance = _score_to_label(rerank_score)
             formatted += f"\n相关性: {relevance} ({rerank_score:.4f})"
-
         formatted += f"\n内容:\n{doc.page_content}\n"
-
         formatted_parts.append(formatted)
-
     return "\n".join(formatted_parts)
 
 
 def _score_to_label(score: float) -> str:
-    """将重排分数转换为可读的相关性标签
-
-    Args:
-        score: 重排分数 (0.0 ~ 1.0)
-
-    Returns:
-        str: 相关性标签
-    """
+    """将重排分数转换为可读的相关性标签。"""
     if score >= 0.8:
         return "高度相关"
     elif score >= 0.6:
@@ -203,7 +162,7 @@ def _score_to_label(score: float) -> str:
         return "低相关"
 
 
-def _build_milvus_filter(filters: Dict[str, str]) -> Optional[str]:
+def _build_milvus_filter(filters: dict[str, str]) -> str | None:
     """构造只允许使用白名单字段的 Milvus JSON 过滤表达式。"""
     expressions = []
     for key, value in filters.items():
@@ -223,13 +182,13 @@ def _document_key(document: Document) -> str:
 
 
 def _merge_ranked_documents(
-    dense_docs: List[Document],
-    keyword_docs: List[Document],
-) -> List[Document]:
+    dense_docs: list[Document],
+    keyword_docs: list[Document],
+) -> list[Document]:
     """使用 RRF 合并两路排名，避免直接相加不同量纲的检索分数。"""
     rrf_constant = 60
-    scores: Dict[str, float] = {}
-    documents: Dict[str, Document] = {}
+    scores: dict[str, float] = {}
+    documents: dict[str, Document] = {}
 
     for rank, document in enumerate(dense_docs, start=1):
         key = _document_key(document)
@@ -250,7 +209,7 @@ def _merge_ranked_documents(
     return ranked_documents
 
 
-def _apply_rerank_threshold(docs: List[Document]) -> List[Document]:
+def _apply_rerank_threshold(docs: list[Document]) -> list[Document]:
     """只对已经有重排分数的结果应用阈值。未触发重排时保留原结果。"""
     scored_docs = [doc for doc in docs if doc.metadata.get("rerank_score") is not None]
     if not scored_docs:

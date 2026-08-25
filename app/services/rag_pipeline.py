@@ -1,14 +1,14 @@
 """RAGPipeline - RAG 检索与入库的深模块对外接口"""
 
-from typing import Dict, List, Optional
+from pathlib import Path
 
 from langchain_core.documents import Document
 
 from app.config import config
+from app.services.document_splitter_service import document_splitter_service
 from app.services.keyword_index_service import keyword_index_service
 from app.services.rerank_service import rerank_service
 from app.services.vector_store_manager import vector_store_manager
-
 
 _FILTER_FIELDS = ("service_name", "environment", "document_type")
 
@@ -16,8 +16,9 @@ _FILTER_FIELDS = ("service_name", "environment", "document_type")
 class RAGPipeline:
     """RAG 检索与入库深模块。
 
-    对外只暴露两个接口：
+    对外只暴露三个接口：
     - query(question, session_id, filters) → str：检索并返回格式化上下文
+    - retrieve(question, filters) → tuple[str, list[Document]]：检索并返回 (上下文, 文档列表)
     - ingest(file_path) → result：文档入库
     """
 
@@ -28,37 +29,103 @@ class RAGPipeline:
     # 对外接口
     # ------------------------------------------------------------------
 
-    async def query(
+    def query(
         self,
         question: str,
         session_id: str,
-        filters: Optional[Dict[str, str]] = None,
+        filters: dict[str, str] | None = None,
     ) -> str:
         """检索知识库并返回格式化后的上下文文本。"""
+        context, _ = self.retrieve(question, filters=filters)
+        return context
+
+    def retrieve(
+        self,
+        question: str,
+        filters: dict[str, str] | None = None,
+    ) -> tuple[str, list[Document]]:
+        """检索知识库，返回 (格式化上下文, 文档列表)。供 Agent tool 使用。"""
         docs: list[Document] = []
 
-        # 优先向量检索，失败则降级到关键词检索
+        # Hybrid search：向量 + 关键词并行召回，RRF 合并
+        dense_docs: list[Document] = []
         try:
-            docs = await self._vector_search(question, filters=filters)
+            dense_docs = self._vector_search(question, filters=filters)
         except RuntimeError:
-            docs = await self._keyword_search(question, filters=filters)
+            pass
+
+        keyword_docs: list[Document] = []
+        if config.rag_hybrid_enabled:
+            keyword_docs = self._keyword_search(question, filters=filters)
+
+        if dense_docs or keyword_docs:
+            docs = self._merge_ranked_documents(dense_docs, keyword_docs)
+        else:
+            docs = []
+
+        if not docs:
+            return "没有找到相关信息。", []
 
         # 重排
-        if docs and self.rerank_enabled:
-            docs = await self._rerank(question, docs)
+        top_k = config.rag_top_k
+        if len(docs) > top_k and self.rerank_enabled:
+            docs = self._rerank(question, docs)
 
-        return self._format_docs(docs)
+        # 阈值过滤
+        docs = self._apply_rerank_threshold(docs)
+        if not docs:
+            return "没有找到足够相关的知识信息。", []
 
-    async def ingest(self, file_path: str) -> dict:
-        """文档入库：分片 → 向量化 → 索引。"""
-        raise NotImplementedError("ingest 路径将在 02 任务中实现")
+        return self._format_docs(docs), docs
+
+    def ingest(
+        self,
+        file_path: str,
+        metadata: dict[str, str] | None = None,
+    ) -> dict:
+        """文档入库：提取 → 分片 → 向量化 → 索引（向量 + 关键词）。"""
+        path = Path(file_path).resolve()
+        if not path.exists() or not path.is_file():
+            raise ValueError(f"文件不存在: {file_path}")
+
+        normalized_path = path.as_posix()
+
+        # 1. 删除该文件的旧索引数据
+        deleted_vector = vector_store_manager.delete_by_source(normalized_path)
+        deleted_keyword = keyword_index_service.delete_by_source(normalized_path)
+        total_deleted = deleted_vector + deleted_keyword
+
+        # 2. 提取文本并分片
+        content = document_splitter_service.extract_text(file_path)
+        documents = document_splitter_service.split_document(
+            content, normalized_path, extra_metadata=metadata
+        )
+
+        if not documents:
+            return {
+                "file_path": file_path,
+                "chunk_count": 0,
+                "document_ids": [],
+                "deleted_count": total_deleted,
+            }
+
+        # 3. 向量存储（自动调用 embedding） + 关键词索引
+        document_ids = vector_store_manager.add_documents(documents)
+        keyword_index_service.upsert_documents(document_ids, documents)
+
+        return {
+            "file_path": file_path,
+            "chunk_count": len(documents),
+            "document_ids": document_ids,
+            "deleted_count": total_deleted,
+        }
 
     # ------------------------------------------------------------------
-    # 内部检索步骤（直接访问模块级服务，便于测试时 patch）
+    # 内部检索步骤
     # ------------------------------------------------------------------
 
-    async def _vector_search(
-        self, question: str, filters: Optional[Dict[str, str]] = None
+    def _vector_search(
+        self, question: str, filters: dict[str, str] | None = None
     ) -> list[Document]:
         """向量检索：返回候选文档列表。"""
         expr = self._build_filter_expr(filters)
@@ -72,8 +139,8 @@ class RAGPipeline:
             for r in results
         ]
 
-    async def _keyword_search(
-        self, question: str, filters: Optional[Dict[str, str]] = None
+    def _keyword_search(
+        self, question: str, filters: dict[str, str] | None = None
     ) -> list[Document]:
         """关键词检索：返回候选文档列表。"""
         clean_filters = {
@@ -87,12 +154,12 @@ class RAGPipeline:
             filters=clean_filters,
         )
 
-    async def _rerank(self, question: str, docs: list[Document]) -> list[Document]:
+    def _rerank(self, question: str, docs: list[Document]) -> list[Document]:
         """语义重排：返回精排后的文档列表。"""
         return rerank_service.rerank(question, docs)
 
     @staticmethod
-    def _build_filter_expr(filters: Optional[Dict[str, str]]) -> Optional[str]:
+    def _build_filter_expr(filters: dict[str, str] | None) -> str | None:
         """构造 Milvus JSON 过滤表达式。"""
         if not filters:
             return None
@@ -118,3 +185,47 @@ class RAGPipeline:
                 f"【参考资料 {i}】\n来源: {source}\n内容:\n{doc.page_content}\n"
             )
         return "\n".join(parts)
+
+    @staticmethod
+    def _document_key(document: Document) -> str:
+        metadata = document.metadata
+        chunk_id = metadata.get("_chunk_id")
+        if chunk_id:
+            return str(chunk_id)
+        return f"{metadata.get('_source', '')}:{metadata.get('chunk_index', '')}:{document.page_content}"
+
+    @staticmethod
+    def _merge_ranked_documents(
+        dense_docs: list[Document],
+        keyword_docs: list[Document],
+    ) -> list[Document]:
+        """使用 RRF 合并两路排名。"""
+        rrf_constant = 60
+        scores: dict[str, float] = {}
+        documents: dict[str, Document] = {}
+
+        for rank, document in enumerate(dense_docs, start=1):
+            key = RAGPipeline._document_key(document)
+            scores[key] = scores.get(key, 0.0) + 1 / (rrf_constant + rank)
+            documents[key] = document
+
+        for rank, document in enumerate(keyword_docs, start=1):
+            key = RAGPipeline._document_key(document)
+            scores[key] = scores.get(key, 0.0) + 1 / (rrf_constant + rank)
+            documents.setdefault(key, document)
+
+        ranked_keys = sorted(scores, key=scores.get, reverse=True)
+        return [documents[key] for key in ranked_keys]
+
+    @staticmethod
+    def _apply_rerank_threshold(docs: list[Document]) -> list[Document]:
+        """只对已有重排分数的结果应用阈值。"""
+        scored = [doc for doc in docs if doc.metadata.get("rerank_score") is not None]
+        if not scored:
+            return docs
+        return [
+            doc
+            for doc in docs
+            if float(doc.metadata.get("rerank_score", 0.0))
+            >= config.rag_min_rerank_score
+        ]
