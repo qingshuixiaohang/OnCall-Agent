@@ -5,6 +5,9 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      SILICONFLOW_API_KEY: "ci-placeholder"
+      DASHSCOPE_API_KEY: "ci-placeholder"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
