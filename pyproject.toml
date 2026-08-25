@@ -105,6 +105,7 @@ exclude = [
 
 [tool.ruff.per-file-ignores]
 "__init__.py" = ["F401"]  # unused imports in __init__.py
+"upload_cls_logs.py" = ["I001"]  # import 需放在 stdout 编码设置之后，无法遵循 isort 排序
 
 [tool.ruff.isort]
 known-first-party = ["app"]

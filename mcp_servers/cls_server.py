@@ -4,20 +4,20 @@
 通过腾讯云 CLS API 查询真实日志数据。
 """
 
-import logging
 import functools
 import json
+import logging
 import os
 import time
-from pathlib import Path
-from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
+from tencentcloud.cls.v20201016 import cls_client, models as cls_models
 from tencentcloud.common import credential
 from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
-from tencentcloud.cls.v20201016 import cls_client, models as cls_models
 
 # 加载项目根目录的 .env，读腾讯云密钥
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -41,7 +41,7 @@ logger = logging.getLogger("CLS_MCP_Server")
 mcp = FastMCP("CLS")
 
 
-def _get_cls_client(region: Optional[str] = None) -> cls_client.ClsClient:
+def _get_cls_client(region: str | None = None) -> cls_client.ClsClient:
     """创建腾讯云 CLS 客户端
 
     Args:
@@ -67,7 +67,7 @@ def log_tool_call(func):
         method_name = func.__name__
 
         # 记录调用信息
-        logger.info(f"=" * 80)
+        logger.info("=" * 80)
         logger.info(f"调用方法: {method_name}")
 
         # 记录参数（排除self等）
@@ -86,7 +86,7 @@ def log_tool_call(func):
             result = func(*args, **kwargs)
 
             # 记录返回状态
-            logger.info(f"返回状态: SUCCESS")
+            logger.info("返回状态: SUCCESS")
 
             # 记录返回结果摘要（避免日志过长）
             if isinstance(result, dict):
@@ -96,20 +96,20 @@ def log_tool_call(func):
             else:
                 logger.info(f"返回结果: {result}")
 
-            logger.info(f"=" * 80)
+            logger.info("=" * 80)
             return result
 
         except Exception as e:
             # 记录错误状态
-            logger.error(f"返回状态: ERROR")
+            logger.error("返回状态: ERROR")
             logger.error(f"错误信息: {str(e)}")
-            logger.error(f"=" * 80)
+            logger.error("=" * 80)
             raise
 
     return wrapper
 
 
-def parse_time_or_default(time_str: Optional[str], default_offset_hours: int = 0) -> datetime:
+def parse_time_or_default(time_str: str | None, default_offset_hours: int = 0) -> datetime:
     """解析时间字符串或返回默认时间。
 
     Args:
@@ -145,24 +145,24 @@ def generate_time_series(base_time: datetime, minutes_offset: int) -> str:
 @log_tool_call
 def get_current_timestamp() -> int:
     """获取当前时间戳（以毫秒为单位）。
-    
+
     此工具用于获取标准的毫秒时间戳，可用于：
     1. 作为 search_log 的 end_time 参数（查询到现在）
     2. 计算历史时间点作为 start_time 参数
-    
+
     Returns:
         int: 当前时间戳（毫秒），例如: 1708012345000
-    
+
     使用示例:
         # 获取当前时间
         current = get_current_timestamp()
-        
+
         # 计算15分钟前的时间
         fifteen_min_ago = current - (15 * 60 * 1000)
-        
+
         # 计算1小时前的时间
         one_hour_ago = current - (60 * 60 * 1000)
-        
+
         # 用于搜索最近15分钟的日志
         search_log(
             topic_id="topic-001",
@@ -175,7 +175,7 @@ def get_current_timestamp() -> int:
 
 @mcp.tool()
 @log_tool_call
-def get_region_code_by_name(region_name: str) -> Dict[str, Any]:
+def get_region_code_by_name(region_name: str) -> dict[str, Any]:
     """根据地区名称搜索对应的地区参数。
 
     Args:
@@ -208,7 +208,7 @@ def get_region_code_by_name(region_name: str) -> Dict[str, Any]:
 
 @mcp.tool()
 @log_tool_call
-def get_topic_info_by_name(topic_name: str, region_code: Optional[str] = None) -> Dict[str, Any]:
+def get_topic_info_by_name(topic_name: str, region_code: str | None = None) -> dict[str, Any]:
     """根据主题名称搜索相关的主题信息。
 
     Args:
@@ -253,26 +253,26 @@ def get_topic_info_by_name(topic_name: str, region_code: Optional[str] = None) -
 @log_tool_call
 def search_topic_by_service_name(
     service_name: str,
-    region_code: Optional[str] = None,
+    region_code: str | None = None,
     fuzzy: bool = True
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """根据服务名称搜索相关的日志主题信息，支持模糊搜索。
-    
+
     此工具用于根据服务名称查找对应的日志主题（topic），便于后续进行日志查询。
-    
+
     Args:
         service_name: 服务名称（必填）
             示例: "data-sync-service", "sync", "data-sync"
             说明: 当 fuzzy=True 时，支持部分匹配
-        
+
         region_code: 地区代码（可选）
             示例: "ap-beijing", "ap-shanghai"
             说明: 如果指定，只返回该地区的主题
-        
+
         fuzzy: 是否启用模糊搜索（可选，默认 True）
             True: 部分匹配，例如 "sync" 可以匹配 "data-sync-service"
             False: 精确匹配，必须完全一致
-    
+
     Returns:
         Dict: 搜索结果
             - total: 匹配到的主题数量
@@ -285,31 +285,31 @@ def search_topic_by_service_name(
                 * log_count: 日志数量
                 * description: 主题描述
             - query: 查询条件
-    
+
     使用示例:
         # 示例1: 模糊搜索（推荐）
         search_topic_by_service_name(service_name="data-sync")
         # 可以匹配: "data-sync-service", "data-sync-worker" 等
-        
+
         # 示例2: 精确搜索
         search_topic_by_service_name(
             service_name="data-sync-service",
             fuzzy=False
         )
-        
+
         # 示例3: 指定地区搜索
         search_topic_by_service_name(
             service_name="sync",
             region_code="ap-beijing"
         )
-        
+
         # 示例4: 查找后进行日志搜索的完整流程
         # 步骤1: 根据服务名查找 topic
         result = search_topic_by_service_name(service_name="data-sync-service")
-        
+
         # 步骤2: 获取 topic_id
         topic_id = result["topics"][0]["topic_id"]  # "topic-001"
-        
+
         # 步骤3: 使用 topic_id 查询日志
         current_ts = get_current_timestamp()
         start_ts = current_ts - (15 * 60 * 1000)
@@ -415,33 +415,33 @@ def search_log(
     topic_id: str,
     start_time: int,
     end_time: int,
-    query: Optional[str] = None,
+    query: str | None = None,
     limit: int = 100
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """基于提供的查询参数搜索日志。
 
     Args:
         topic_id: 主题ID（必填）
             示例: "topic-001"
-        
+
         start_time: 开始时间戳，单位为毫秒（必填，int类型）
             重要: 必须传递整数类型的毫秒时间戳
-            获取方式: 
+            获取方式:
             1. 使用 get_current_timestamp() 工具获取当前时间戳
             2. 计算历史时间: current_timestamp - (分钟数 * 60 * 1000)
-            示例: 
+            示例:
             - 当前时间: 1708012345000
             - 15分钟前: 1708012345000 - (15 * 60 * 1000) = 1708011445000
             - 1小时前: 1708012345000 - (60 * 60 * 1000) = 1708008745000
-        
+
         end_time: 结束时间戳，单位为毫秒（必填，int类型）
             重要: 必须传递整数类型的毫秒时间戳
             通常使用 get_current_timestamp() 工具获取当前时间作为结束时间
             示例: 1708012345000
-        
+
         query: 查询语句（可选，CLS 查询语法）
             示例: "level:ERROR" 或 "message:异常"
-        
+
         limit: 返回结果数量限制（默认100，可选）
 
     Returns:
@@ -458,14 +458,14 @@ def search_log(
                 * message: 日志内容
             - took_ms: 查询耗时（毫秒）
             - message: 查询状态消息
-    
+
     使用示例:
         # 步骤1: 获取当前时间戳
         current_ts = get_current_timestamp()  # 返回: 1708012345000
-        
+
         # 步骤2: 计算开始时间（15分钟前）
         start_ts = current_ts - (15 * 60 * 1000)  # 1708011445000
-        
+
         # 步骤3: 搜索日志
         search_log(
             topic_id="topic-001",
@@ -560,8 +560,8 @@ def search_log(
 
 
 if __name__ == "__main__":
-    print(f"启动 CLS MCP 服务...")
+    print("启动 CLS MCP 服务...")
     print(f"传输协议: {TRANSPORT}")
     print(f"监听地址: {HOST}:{PORT}")
-    print(f"访问路径: /sse")
+    print("访问路径: /sse")
     mcp.run(transport=TRANSPORT, host=HOST, port=PORT, path="/sse")

@@ -6,15 +6,18 @@
 """
 import os
 import sys
-import json
 from datetime import datetime, timedelta
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-from dotenv import load_dotenv
-from tencentcloud.common import credential
-from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
-from tencentcloud.cls.v20201016 import cls_client, models as cls_models
+# noqa: E402 - 此 import 有意放在 stdout 编码设置之后，避免 Windows 下 import 时打印乱码
+from dotenv import load_dotenv  # noqa: E402
+from tencentcloud.cls.v20201016 import (  # noqa: E402
+    cls_client,
+    models as cls_models,
+)
+from tencentcloud.common import credential  # noqa: E402
+from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException  # noqa: E402
 
 load_dotenv()
 
@@ -232,8 +235,8 @@ if __name__ == "__main__":
     print(f"   - Region: {REGION}")
     print(f"   - Topic ID: {TOPIC_ID}")
     print(f"   - Total logs: {len(ALL_LOGS)}")
-    services = set(log[1] for log in ALL_LOGS)
-    levels = set(log[0] for log in ALL_LOGS)
+    services = {log[1] for log in ALL_LOGS}
+    levels = {log[0] for log in ALL_LOGS}
     print(f"   - Services: {', '.join(sorted(services))}")
     print(f"   - Levels: {', '.join(sorted(levels))}")
     print()
@@ -241,11 +244,11 @@ if __name__ == "__main__":
     count = upload_logs()
     if count:
         print(f"\nUpload success! {count} logs uploaded.")
-        print(f"\nNext steps:")
-        print(f"   1. Start CLS MCP server: uv run python mcp_servers/cls_server.py")
-        print(f"   2. Try these queries with AIOps Agent:")
-        print(f"      - 'data-sync-service 最近有什么 ERROR 日志？'")
-        print(f"      - 'database 主库是不是挂了？'")
-        print(f"      - 'web-server 有哪些异常？'")
+        print("\nNext steps:")
+        print("   1. Start CLS MCP server: uv run python mcp_servers/cls_server.py")
+        print("   2. Try these queries with AIOps Agent:")
+        print("      - 'data-sync-service 最近有什么 ERROR 日志？'")
+        print("      - 'database 主库是不是挂了？'")
+        print("      - 'web-server 有哪些异常？'")
     else:
         print("\nUpload failed.")

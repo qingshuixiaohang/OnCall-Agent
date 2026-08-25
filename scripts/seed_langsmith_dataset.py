@@ -175,7 +175,7 @@ def seed_dataset() -> None:
         )
 
     logger.info(f"测试集导入完成，共 {len(TEST_CASES)} 条示例")
-    logger.info(f"请在 LangSmith WebUI 的 Datasets & Experiments 中查看")
+    logger.info("请在 LangSmith WebUI 的 Datasets & Experiments 中查看")
 
 
 if __name__ == "__main__":

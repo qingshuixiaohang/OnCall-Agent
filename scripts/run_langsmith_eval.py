@@ -61,7 +61,7 @@ def _get_or_create_loop() -> asyncio.AbstractEventLoop:
 async def _run_multi_agent(inputs: dict[str, Any]) -> dict[str, Any]:
     """
     调用 Multi-Agent 服务执行用户输入
-    
+
     返回：
         {
             "user_input": str,
@@ -70,25 +70,25 @@ async def _run_multi_agent(inputs: dict[str, Any]) -> dict[str, Any]:
         }
     """
     from app.agent.multi_agent import multi_agent_service
-    
+
     user_input = inputs.get("user_input", "")
-    
+
     actual_specialists: list[str] = []
     final_report = ""
-    
+
     async for event in multi_agent_service.execute(
         user_input=user_input,
         session_id=f"eval-{hash(user_input)}",
     ):
         event_type = event.get("type")
-        
+
         if event_type == "routing":
             actual_specialists = event.get("specialists", [])
             logger.debug(f"[{user_input[:30]}] 路由结果: {actual_specialists}")
-        
+
         elif event_type == "complete":
             final_report = event.get("report", "")
-    
+
     return {
         "user_input": user_input,
         "actual_specialists": actual_specialists,
@@ -99,7 +99,7 @@ async def _run_multi_agent(inputs: dict[str, Any]) -> dict[str, Any]:
 def multi_agent_target(inputs: dict[str, Any]) -> dict[str, Any]:
     """
     LangSmith evaluate 的同步 target 函数
-    
+
     修复：复用全局事件循环，避免 MCP 客户端 httpx 连接池清理时报错
     """
     loop = _get_or_create_loop()
@@ -114,7 +114,7 @@ def routing_evaluator(
 ) -> dict[str, Any]:
     """
     自定义评估函数：对比预期 Specialist 与实际 Specialist
-    
+
     返回：
         {
             "key": "routing_accuracy",
@@ -124,10 +124,10 @@ def routing_evaluator(
     """
     expected = example.outputs.get("expected_specialists", []) if example.outputs else []
     actual = run.outputs.get("actual_specialists", []) if run.outputs else []
-    
+
     expected_set = set(expected)
     actual_set = set(actual)
-    
+
     # 改进的评分逻辑
     if not expected_set and not actual_set:
         score = 1.0
@@ -143,9 +143,9 @@ def routing_evaluator(
     else:
         score = 0.0
         comment = f"路由错误，预期: {expected}, 实际: {actual}"
-    
+
     logger.info(f"评估 [{example.inputs.get('user_input', '')[:30]}]: {score} - {comment}")
-    
+
     return {
         "key": "routing_accuracy",
         "score": score,
@@ -159,10 +159,10 @@ def run_evaluation() -> None:
     """运行 LangSmith 评估（同步版本，兼容最新 SDK）"""
     from langsmith import Client
     from langsmith.evaluation import evaluate
-    
+
     client = Client()
     dataset_name = "multi-agent-routing-test"
-    
+
     # 1. 确认数据集存在（同步 API）
     try:
         dataset = client.read_dataset(dataset_name=dataset_name)
@@ -170,11 +170,11 @@ def run_evaluation() -> None:
     except Exception:
         logger.error(f"Dataset '{dataset_name}' 不存在，请先运行 seed_langsmith_dataset.py")
         sys.exit(1)
-    
+
     # 2. 运行评估
     logger.info("开始 LangSmith 评估...")
-    
-    results = evaluate(
+
+    _ = evaluate(
         multi_agent_target,
         data=dataset_name,
         evaluators=[routing_evaluator],
@@ -184,10 +184,10 @@ def run_evaluation() -> None:
             "model": os.environ.get("DASHSCOPE_MODEL", "unknown"),
         },
     )
-    
+
     logger.info("评估完成")
     logger.info(f"评估结果已上传到 LangSmith Project: {LANGCHAIN_PROJECT}")
-    logger.info(f"请在 https://smith.langchain.com 查看实验结果")
+    logger.info("请在 https://smith.langchain.com 查看实验结果")
 
 
 if __name__ == "__main__":
