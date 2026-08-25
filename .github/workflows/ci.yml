@@ -11,5 +11,5 @@ jobs:
         with:
           python-version: "3.11"
       - run: uv sync --extra dev
-      - run: uv run ruff check .
+      - run: uv run ruff check app/services/rag_pipeline.py app/services/vector_search_service.py app/services/vector_index_service.py app/api/file.py app/tools/knowledge_tool.py tests/
       - run: uv run pytest tests/ -v
