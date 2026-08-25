@@ -64,7 +64,7 @@ async def list_sessions():
         )
     except Exception as e:
         logger.error(f"列出会话失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/sessions/{session_id}")
@@ -126,7 +126,7 @@ async def get_session_state(session_id: str):
         raise
     except Exception as e:
         logger.error(f"获取会话状态失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/sessions/{session_id}/history")
@@ -166,7 +166,7 @@ async def get_session_history(
         raise
     except Exception as e:
         logger.error(f"读取会话历史失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.delete("/sessions/{session_id}")
@@ -206,7 +206,7 @@ async def delete_session(session_id: str):
         raise
     except Exception as e:
         logger.error(f"删除会话失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 def _matches_session(thread_id: str, session_id: str) -> bool:
@@ -283,4 +283,4 @@ async def storage_health():
         )
     except Exception as e:
         logger.error(f"健康检查失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e

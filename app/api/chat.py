@@ -193,7 +193,7 @@ async def clear_session(request: ClearRequest):
 
     except Exception as e:
         logger.error(f"清空会话错误: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/chat/session/{session_id}", response_model=SessionInfoResponse)
@@ -217,4 +217,4 @@ async def get_session_info(session_id: str) -> SessionInfoResponse:
 
     except Exception as e:
         logger.error(f"获取会话信息错误: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e

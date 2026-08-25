@@ -11,6 +11,8 @@ from langchain_mcp_adapters.interceptors import MCPToolCallRequest
 from loguru import logger
 from mcp.types import CallToolResult, TextContent
 
+from app.config import config
+
 # 全局 MCP 客户端（延迟初始化）
 _mcp_client: MultiServerMCPClient | None = None
 
@@ -73,9 +75,6 @@ async def retry_interceptor(
         isError=True
     )
 
-
-# 从配置文件读取 MCP 服务器配置
-from app.config import config
 
 # 使用配置文件中定义的完整 MCP 服务器配置
 DEFAULT_MCP_SERVERS = config.mcp_servers

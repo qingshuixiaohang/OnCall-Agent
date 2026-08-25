@@ -295,7 +295,7 @@ class AIOpsService:
 
             past_steps = state.get("past_steps", []) or []
             if len(past_steps) > processed_steps:
-                for step, result in past_steps[processed_steps:]:
+                for step, _ in past_steps[processed_steps:]:
                     events.append({
                         "type": "step_complete",
                         "current_step": step,

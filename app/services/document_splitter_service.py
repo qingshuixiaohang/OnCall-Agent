@@ -262,7 +262,7 @@ class DocumentSplitterService:
 
             # 拼接所有页面文本，页间加双换行
             texts = []
-            for i, page in enumerate(pages):
+            for _, page in enumerate(pages):
                 page_text = page.page_content.strip()
                 if page_text:
                     texts.append(page_text)

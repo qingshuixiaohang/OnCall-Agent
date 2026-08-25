@@ -116,7 +116,7 @@ class BaseSpecialist(ABC):
         ]
         tool_traces: list[dict[str, Any]] = []
 
-        for step in range(max_steps):
+        for _ in range(max_steps):
             response = await llm_with_tools.ainvoke(messages)
 
             if not hasattr(response, "tool_calls") or not response.tool_calls:
@@ -135,7 +135,7 @@ class BaseSpecialist(ABC):
             messages.extend(tool_messages["messages"])
 
             for tool_call, tool_message in zip(
-                response.tool_calls, tool_messages["messages"]
+                response.tool_calls, tool_messages["messages"], strict=True
             ):
                 raw_result = getattr(tool_message, "content", "")
                 try:

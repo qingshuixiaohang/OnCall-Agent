@@ -131,7 +131,7 @@ async def supervisor_node(state: MultiAgentState) -> dict[str, Any]:
             tasks = decision.get("tasks", []) if isinstance(decision, dict) else []
 
         # 即使模型输出了错误名称，也不能让它直接进入图的动态边。
-        task_pairs = list(zip(specialists, tasks))
+        task_pairs = list(zip(specialists, tasks, strict=False))
         if len(tasks) < len(specialists):
             task_pairs.extend(
                 (specialist, f"分析与用户问题相关的 {specialist} 信息")
