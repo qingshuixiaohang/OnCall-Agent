@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>Architecture Review - OnCall-Agent</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose" });
+    </script>
+    <style>
+      .seam { stroke-dasharray: 4 4; }
+      .leak { stroke: #dc2626; }
+      .deep { background: linear-gradient(135deg, #0f172a, #1e293b); }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 font-sans">
+    <main class="max-w-5xl mx-auto px-6 py-12 space-y-12">
+      <header>
+        <div class="flex items-center gap-3 mb-2">
+          <h1 class="text-2xl font-bold">OnCall-Agent 架构审查</h1>
+          <span class="text-sm text-stone-500">2025-08-25</span>
+        </div>
+        <div class="flex gap-4 text-xs text-stone-600">
+          <span class="inline-flex items-center gap-1"><span class="w-3 h-3 rounded bg-slate-800 inline-block"></span> 深模块</span>
+          <span class="inline-flex items-center gap-1"><span class="w-3 h-3 border border-slate-400 inline-block" style="border-style:dashed"></span> Seam（接缝）</span>
+          <span class="inline-flex items-center gap-1"><span class="w-3 h-3 inline-block" style="background:#dc2626"></span> 泄漏</span>
+        </div>
+      </header>
+
+      <section id="candidates" class="space-y-10">
+
+        <!-- Candidate 1 -->
+        <article class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+            <h2 class="text-lg font-semibold">1. RAG 服务层碎片化 → 收拢为深模块</h2>
+            <span class="px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-700">Strong</span>
+          </div>
+          <div class="p-6 space-y-4">
+            <div class="text-sm text-stone-500 font-mono">app/services/vector_embedding_service.py · vector_index_service.py · vector_search_service.py · vector_store_manager.py · rerank_service.py · document_splitter_service.py · keyword_index_service.py · rag_agent_service.py</div>
+            <div class="grid md:grid-cols-2 gap-4">
+              <div class="rounded-lg border border-slate-200 p-4">
+                <div class="text-xs font-medium text-stone-500 mb-2">Before：8 个浅服务，调用方手动组装</div>
+                <pre class="mermaid text-xs">
+flowchart TD
+      A[rag_agent_service] --> B[vector_embedding_service]
+      A --> C[vector_index_service]
+      A --> D[vector_search_service]
+      A --> E[vector_store_manager]
+      A --> F[rerank_service]
+      A --> G[document_splitter_service]
+      A --> H[keyword_index_service]
+      B -.leak.-> I[Milvus 连接细节]
+      C -.leak.-> I
+      D -.leak.-> I
+      E -.leak.-> I
+      classDef leak stroke:#dc2626,stroke-width:2px,fill:#fef2f2;
+      class I leak
+                </pre>
+              </div>
+              <div class="rounded-lg border border-slate-200 p-4">
+                <div class="text-xs font-medium text-stone-500 mb-2">After：一个 RAGPipeline 深模块</div>
+                <pre class="mermaid text-xs">
+flowchart LR
+      A[rag_agent_service] --> B[RAGPipeline]
+      B --> C[.query / .ingest]
+      C -.seam.-> D[内部: embedding + index + search + rerank]
+      classDef deep fill:#0f172a,color:#fff;
+      class B,C deep
+                </pre>
+              </div>
+            </div>
+            <div class="text-sm"><span class="font-medium">问题：</span>接口复杂度 ≈ 实现复杂度，调用方要理解 8 个服务的协作方式，新增检索策略需改多处。</div>
+            <div class="text-sm"><span class="font-medium">方案：</span>抽一个 RAGPipeline 深模块，对外只暴露 <code class="bg-stone-100 px-1 rounded">query()</code> 和 <code class="bg-stone-100 px-1 rounded">ingest()</code>，内部细节封装。</div>
+            <ul class="text-sm text-stone-700 space-y-1 list-disc list-inside">
+              <li>测试只需 mock 一个接口</li>
+              <li>Milvus/关键词/重排的切换不再泄漏到调用方</li>
+              <li>新增检索策略只需改模块内部</li>
+            </ul>
+          </div>
+        </article>
+
+        <!-- Candidate 2 -->
+        <article class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+            <h2 class="text-lg font-semibold">2. MCP 客户端缺少 Adapter 层</h2>
+            <span class="px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">Worth exploring</span>
+          </div>
+          <div class="p-6 space-y-4">
+            <div class="text-sm text-stone-500 font-mono">app/agent/mcp_client.py · planner.py · executor.py · supervisor.py</div>
+            <div class="grid md:grid-cols-2 gap-4">
+              <div class="rounded-lg border border-slate-200 p-4">
+                <div class="text-xs font-medium text-stone-500 mb-2">Before：业务代码直接依赖 MCP 协议</div>
+                <pre class="mermaid text-xs">
+flowchart TD
+      A[Planner] --> B[MCP 协议调用]
+      C[Executor] --> B
+      D[Supervisor] --> B
+      B --> E[CLS Server]
+      B --> F[Monitor Server]
+      B -.leak.-> G[tool_name / arguments / transport]
+      classDef leak stroke:#dc2626,stroke-width:2px,fill:#fef2f2;
+      class G leak
+                </pre>
+              </div>
+              <div class="rounded-lg border border-slate-200 p-4">
+                <div class="text-xs font-medium text-stone-500 mb-2">After：MCP Adapter 封装协议细节</div>
+                <pre class="mermaid text-xs">
+flowchart LR
+      A[Planner] --> C[LogAdapter]
+      C --> B[MCP 协议调用]
+      D[Executor] --> C
+      E[Supervisor] --> C
+      C -.seam.-> F[CLS / Monitor]
+      classDef deep fill:#0f172a,color:#fff;
+      class C deep
+                </pre>
+              </div>
+            </div>
+            <div class="text-sm"><span class="font-medium">问题：</span>Planner/Executor/Supervisor 直接拼 MCP 工具名和参数，协议细节泄漏到业务逻辑。</div>
+            <div class="text-sm"><span class="font-medium">方案：</span>引入 LogAdapter / MonitorAdapter，业务代码只喊"查日志"/"查监控"，不关心底层是 MCP 还是 REST。</div>
+            <ul class="text-sm text-stone-700 space-y-1 list-disc list-inside">
+              <li>切换数据源只需改 Adapter</li>
+              <li>业务测试不再需要 MCP server 运行</li>
+              <li>降级/重试逻辑集中在一处</li>
+            </ul>
+          </div>
+        </article>
+
+        <!-- Candidate 3 -->
+        <article class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+            <h2 class="text-lg font-semibold">3. 诊断状态定义分散</h2>
+            <span class="px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-600">Speculative</span>
+          </div>
+          <div class="p-6 space-y-4">
+            <div class="text-sm text-stone-500 font-mono">app/agent/aiops/state.py · app/agent/multi_agent/state.py · app/models/aiops.py</div>
+            <div class="grid md:grid-cols-2 gap-4">
+              <div class="rounded-lg border border-slate-200 p-4">
+                <div class="text-xs font-medium text-stone-500 mb-2">Before：两套状态各管各的</div>
+                <pre class="mermaid text-xs">
+flowchart TD
+      A[aiops/state.py] --> B[AIOpsState]
+      C[multi_agent/state.py] --> D[MultiAgentState]
+      B -.leak.-> E[diagnosis_history]
+      D -.leak.-> E
+      E -.leak.-> F[跨工作流复用]
+      classDef leak stroke:#dc2626,stroke-width:2px,fill:#fef2f2;
+      class E leak
+                </pre>
+              </div>
+              <div class="rounded-lg border border-slate-200 p-4">
+                <div class="text-xs font-medium text-stone-500 mb-2">After：统一 DiagnosisState 基类</div>
+                <pre class="mermaid text-xs">
+flowchart LR
+      A[DiagnosisState] --> B[AIOpsState]
+      A --> C[MultiAgentState]
+      B --> D[planner/executor/replanner]
+      C --> E[supervisor/specialists]
+      classDef deep fill:#0f172a,color:#fff;
+              class A deep
+                </pre>
+              </div>
+            </div>
+            <div class="text-sm"><span class="font-medium">问题：</span>两个工作流各自维护状态结构，diagnosis_history、time_context 等字段可能重复定义。</div>
+            <div class="text-sm"><span class="font-medium">方案：</span>抽一个 DiagnosisState 基类，共享受诊历史和上下文管理。</div>
+            <ul class="text-sm text-stone-700 space-y-1 list-disc list-inside">
+              <li>消除状态结构重复</li>
+              <li>新增工作流类型只需继承基类</li>
+            </ul>
+          </div>
+        </article>
+
+      </section>
+
+      <section id="top-recommendation" class="rounded-xl border-2 border-emerald-200 bg-emerald-50/50 p-6">
+        <h2 class="text-lg font-bold text-emerald-900 mb-2">🎯 优先推荐：RAG 服务层收拢</h2>
+        <p class="text-sm text-emerald-800">这是最强信号：8 个服务文件，调用方手动组装，接口复杂度接近实现复杂度。收拢后测试面、替换成本、新增策略的成本都大幅下降。建议从这里开始深化。</p>
+      </section>
+    </main>
+  </body>
+</html>
