@@ -46,6 +46,18 @@ class TestRAGPipelineQuery:
         assert isinstance(result, str)
         assert "Redis 连接超时排查" in result
 
+    def test_retrieve_fallback_when_vector_search_raises_any_exception(self, pipeline):
+        """回归保护：_vector_search 抛任何异常时降级到关键词检索，不穿透"""
+        mock_doc = MagicMock()
+        mock_doc.page_content = "关键词结果"
+        mock_doc.metadata = {"_file_name": "k.md", "rerank_score": 0.8}
+
+        with patch.object(pipeline, "_vector_search", side_effect=AttributeError("模拟字段错误")),              patch.object(pipeline, "_keyword_search", return_value=[mock_doc]),              patch.object(pipeline, "_rerank", side_effect=lambda q, docs: docs):
+            result = pipeline.query("fault", "s1")
+
+        assert isinstance(result, str)
+        assert "关键词结果" in result
+
     def test_query_skips_rerank_when_disabled(self, pipeline):
         """rerank 关闭时：跳过重排步骤"""
         pipeline.rerank_enabled = False

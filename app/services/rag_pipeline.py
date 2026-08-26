@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from langchain_core.documents import Document
+from loguru import logger
 
 from app.config import config
 from app.services.document_splitter_service import document_splitter_service
@@ -51,8 +52,8 @@ class RAGPipeline:
         dense_docs: list[Document] = []
         try:
             dense_docs = self._vector_search(question, filters=filters)
-        except RuntimeError:
-            pass
+        except Exception as e:
+            logger.warning(f"向量检索失败，降级到关键词检索: {e}")
 
         keyword_docs: list[Document] = []
         if config.rag_hybrid_enabled:
