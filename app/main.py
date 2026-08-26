@@ -12,9 +12,10 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
-from app.api import aiops, chat, file, health, multi_agent, router, session
+from app.api import aiops, chat, file, health, multi_agent, reports, router, session
 from app.config import config
 from app.core.checkpointer import close_checkpointer, setup_checkpointer
+from app.core.diagnosis_report_store import report_store
 from app.core.llm_factory import llm_factory
 from app.core.mem0_manager import flush_memory_tasks
 from app.core.milvus_client import milvus_manager
@@ -73,6 +74,15 @@ async def lifespan(app: FastAPI):
         logger.error(f"❌ Checkpointer 初始化失败: {e}")
         raise
 
+    # 初始化诊断报告存储
+    logger.info("📋 正在初始化诊断报告存储...")
+    try:
+        await report_store.initialize()
+        logger.info("✅ 诊断报告存储初始化成功")
+    except Exception as e:
+        logger.error(f"❌ 诊断报告存储初始化失败: {e}")
+        raise
+
     logger.info("=" * 60)
 
     yield
@@ -85,6 +95,9 @@ async def lifespan(app: FastAPI):
 
     logger.info("🗄️ 正在关闭 checkpointer...")
     await close_checkpointer()
+
+    logger.info("📋 正在关闭诊断报告存储...")
+    await report_store.close()
 
     logger.info(f"👋 {config.app_name} 关闭")
 
@@ -114,6 +127,7 @@ app.include_router(aiops.router, prefix="/api", tags=["AIOps智能运维"])
 app.include_router(multi_agent.router, prefix="/api", tags=["Multi-Agent智能运维"])
 app.include_router(router.router, prefix="/api", tags=["智能路由"])
 app.include_router(session.router, prefix="/api", tags=["会话管理"])
+app.include_router(reports.router, prefix="/api", tags=["诊断报告"])
 
 # 挂载静态文件：优先前端构建产物 frontend/dist，缺失时回退到旧 static/
 _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

@@ -3,7 +3,6 @@
 验证 route_from_supervisor 纯函数的路由逻辑。
 """
 
-import pytest
 from langgraph.types import Send
 
 from app.services.workflow_factory import route_from_supervisor

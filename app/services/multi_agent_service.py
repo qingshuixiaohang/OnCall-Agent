@@ -37,6 +37,7 @@ from app.agent.multi_agent.monitor_expert import MonitorExpert
 from app.agent.multi_agent.state import MultiAgentState
 from app.agent.multi_agent.supervisor import supervisor_node
 from app.core.checkpointer import get_checkpointer, thread_id_with_prefix
+from app.core.diagnosis_report_store import DiagnosisReport, report_store
 from app.core.llm_factory import llm_factory
 from app.core.mem0_manager import schedule_memory_save
 from app.core.observability import langchain_config
@@ -197,6 +198,22 @@ class MultiAgentService:
                 "report": final_report,
                 "run_id": run_id,
             }
+
+            # === 保存诊断报告 ===
+            try:
+                report = DiagnosisReport(
+                    session_id=session_id,
+                    run_id=run_id,
+                    mode="multi_agent",
+                    severity="info",
+                    summary=(user_input or "")[:200],
+                    report_markdown=final_report,
+                    status="completed",
+                )
+                await report_store.save(report)
+            except Exception as e:
+                logger.warning("[会话 {}] 保存诊断报告失败（不影响主流程）: {}", session_id, e)
+            # === 结束 ===
 
             logger.info(f"[会话 {session_id}] Multi-Agent 执行完成")
 
