@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections import Counter
-from pathlib import Path
 
+# 确保能从 evals/ 目录直接 import common（不依赖 CWD）
+import sys as _sys
+from collections import Counter
+from pathlib import Path, Path as _Path
+
+_EVALS_DIR = _Path(__file__).resolve().parent
+if str(_EVALS_DIR) not in _sys.path:
+    _sys.path.insert(0, str(_EVALS_DIR))
 from common import dataset_fingerprint, load_cases
 
 

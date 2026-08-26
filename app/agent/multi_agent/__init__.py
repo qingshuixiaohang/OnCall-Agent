@@ -6,9 +6,6 @@
 本包 __init__.py 只做转发，保持旧调用点 from app.agent.multi_agent import multi_agent_service 兼容。
 """
 
-from app.services.multi_agent_service import (
-    MultiAgentService,
-    multi_agent_service,
-)
+from app.services.multi_agent_service import multi_agent_service
 
-__all__ = ["MultiAgentService", "multi_agent_service"]
+__all__ = ["multi_agent_service"]

@@ -99,24 +99,31 @@ async def chat_stream(request: ChatRequest):
                 chunk_type = chunk.get("type", "unknown")
                 chunk_data = chunk.get("data", None)
 
-                # 处理调试类型消息（新增）
-                if chunk_type == "debug":
-                    # 调试信息，可以选择发送或忽略
-                    yield {
-                        "event": "message",
-                        "data": json.dumps({
-                            "type": "debug",
-                            "node": chunk.get("node", "unknown"),
-                            "message_type": chunk.get("message_type", "unknown")
-                        }, ensure_ascii=False)
-                    }
-                elif chunk_type == "tool_call":
+                if chunk_type == "tool_call":
                     # 发送工具调用事件（可选，前端可以显示工具调用状态）
                     yield {
                         "event": "message",
                         "data": json.dumps({
                             "type": "tool_call",
                             "data": chunk_data
+                        }, ensure_ascii=False)
+                    }
+                elif chunk_type == "tool_result":
+                    # 发送工具结果事件（前端可渲染工具输出）
+                    yield {
+                        "event": "message",
+                        "data": json.dumps({
+                            "type": "tool_result",
+                            "data": chunk_data
+                        }, ensure_ascii=False)
+                    }
+                elif chunk_type == "warning":
+                    # 发送警告事件（如检索降级提示），避免静默丢弃
+                    yield {
+                        "event": "message",
+                        "data": json.dumps({
+                            "type": "warning",
+                            "data": str(chunk_data)
                         }, ensure_ascii=False)
                     }
                 elif chunk_type == "search_results":

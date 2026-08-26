@@ -5,8 +5,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 
+# 确保能从 evals/ 目录直接 import common（不依赖 CWD）
+import sys as _sys
+from pathlib import Path, Path as _Path
+
+_EVALS_DIR = _Path(__file__).resolve().parent
+if str(_EVALS_DIR) not in _sys.path:
+    _sys.path.insert(0, str(_EVALS_DIR))
 from common import (
     config_snapshot,
     dataset_fingerprint,

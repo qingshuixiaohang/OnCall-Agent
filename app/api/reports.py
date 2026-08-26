@@ -56,6 +56,11 @@ async def get_report_trends(
     group_by: str = Query("service", description="分组维度: service/severity/date"),
 ):
     """诊断报告趋势聚合"""
+    if group_by not in ("service", "severity", "date"):
+        raise HTTPException(
+            status_code=400,
+            detail="group_by 只能是 service / severity / date",
+        )
     try:
         result = await report_store.trends(
             from_date=from_date,

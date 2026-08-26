@@ -57,14 +57,6 @@ class KnowledgePrefetcher:
     将结果注入到问题文本中，让 LLM 优先使用知识库证据。
     """
 
-    _NO_EVIDENCE_RESPONSE = (
-        "当前知识库未覆盖这个问题，暂时无法根据现有资料给出可靠答案。"
-        "请补充相关文档或提供更具体的服务信息。"
-    )
-    _RETRIEVAL_ERROR_RESPONSE = (
-        "知识库检索暂时失败，无法确认相关资料。请稍后重试，或检查知识库服务。"
-    )
-
     # ------------------------------------------------------------------
     # 接口
     # ------------------------------------------------------------------
@@ -123,7 +115,7 @@ class KnowledgePrefetcher:
     def _should_prefetch(cls, question: str) -> bool:
         """判断是否需要预取知识。"""
         normalized = question.strip().lower()
-        if not normalized or cls._TRIVIAL_QUERY_PATTERN.fullmatch(normalized):
+        if not normalized or _TRIVIAL_QUERY_PATTERN.fullmatch(normalized):
             return False
         return len(normalized) >= 6 and any(
             term in normalized for term in _KNOWLEDGE_TERMS

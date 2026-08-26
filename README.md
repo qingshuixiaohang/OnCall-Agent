@@ -210,6 +210,10 @@ curl.exe -X POST "http://localhost:9900/api/index_directory"
 | `/api/aiops_multi` | POST | Supervisor + Specialist 多 Agent 诊断，SSE |
 | `/api/router` | POST | 根据问题自动路由到 RAG、AIOps 或 Multi-Agent |
 | `/api/upload` | POST | 上传知识库文档 |
+| `/api/index_directory` | POST | 批量索引目录文件 |
+| `/api/reports` | GET | 诊断报告列表（分页，支持 mode/severity/service/时间过滤） |
+| `/api/reports/{id}` | GET | 单条诊断报告详情 |
+| `/api/reports/trends` | GET | 诊断趋势聚合（按 service/severity/date 分组） |
 | `/api/sessions` | GET | 获取会话列表 |
 | `/api/chat/session/{id}` | GET | 获取会话历史 |
 | `/api/chat/clear` | POST | 清空会话历史 |
@@ -320,6 +324,7 @@ OnCall-Agent/
 │   │   ├── aiops.py                    # 单 Agent 诊断接口
 │   │   ├── multi_agent.py              # 多 Agent 诊断接口
 │   │   ├── router.py                   # 智能路由接口
+│   │   ├── reports.py                  # 诊断报告查询接口
 │   │   ├── session.py                  # 会话管理接口
 │   │   ├── file.py                     # 文件上传接口
 │   │   └── health.py                   # 健康检查接口

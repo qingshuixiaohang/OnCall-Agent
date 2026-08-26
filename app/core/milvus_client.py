@@ -89,6 +89,7 @@ class MilvusClientManager:
         # 幂等：导入阶段可能已由 VectorStoreManager 等提前连接，避免重复初始化
         if self._collection is not None:
             logger.debug("Milvus 已连接，跳过重复 connect")
+            return
 
         try:
             _patch_pymilvus_milvus_client_orm_alias()

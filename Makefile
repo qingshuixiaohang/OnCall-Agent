@@ -1,12 +1,16 @@
 # SuperBizAgent Python 版本 Makefile
 # 用于自动化项目初始化、Docker 管理和文档向量化
+#
+# ⚠️ 平台说明：本文件使用 .venv/bin/python、pgrep/nohup 等 Unix 工具，
+#    仅适用于 macOS / Linux（或 Windows 下的 WSL/Git-Bash）。
+#    Windows 原生环境请改用 .venv\Scripts\python.exe 手动执行对应命令。
 
 # ============================================================
 # 配置变量
 # ============================================================
 SERVER_URL = http://localhost:9900
 UPLOAD_API = $(SERVER_URL)/api/upload
-HEALTH_CHECK_API = $(SERVER_URL)/health
+HEALTH_CHECK_API = $(SERVER_URL)/api/health
 DOCS_DIR = aiops-docs
 MILVUS_CONTAINER = milvus-standalone
 
@@ -501,7 +505,7 @@ test-upload:
 
 install:  ## 安装依赖（生产环境）
 	@echo "$(YELLOW)📦 安装依赖...$(NC)"
-	pip install -r requirements.txt 2>/dev/null || pip install -e .
+	pip install -e .
 	@echo "$(GREEN)✅ 依赖安装完成$(NC)"
 
 install-dev:  ## 安装开发依赖

@@ -109,6 +109,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # unused imports in __init__.py
 "upload_cls_logs.py" = ["I001"]  # import 需放在 stdout 编码设置之后，无法遵循 isort 排序
+"evals/*.py" = ["E402"]  # evals 脚本需先注入 sys.path 再 import common
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
@@ -141,6 +142,7 @@ python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.coverage.run]
 source = ["app"]
@@ -196,7 +198,7 @@ skips = ["*/test_*.py", "*_test.py"]
 include = ["app"]
 exclude = ["**/node_modules", "**/__pycache__", ".git", ".venv", "venv", "logs"]
 pythonVersion = "3.11"
-pythonPlatform = "Darwin"
+pythonPlatform = "Windows"
 typeCheckingMode = "basic"
 
 reportMissingImports = "none"

@@ -6,10 +6,16 @@ import argparse
 import json
 import math
 import sys
+
+# 确保能从 evals/ 目录直接 import common（不依赖 CWD）
+import sys as _sys
 import warnings
-from pathlib import Path
+from pathlib import Path, Path as _Path
 from typing import Any
 
+_EVALS_DIR = _Path(__file__).resolve().parent
+if str(_EVALS_DIR) not in _sys.path:
+    _sys.path.insert(0, str(_EVALS_DIR))
 from common import config_snapshot, dataset_fingerprint, invoke_retriever, load_cases
 
 _ABSTENTION_MARKERS = (

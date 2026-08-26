@@ -85,6 +85,9 @@ class RAGPipeline:
         metadata: dict[str, str] | None = None,
     ) -> dict:
         """文档入库：提取 → 分片 → 向量化 → 索引（向量 + 关键词）。"""
+        import time
+
+        start = time.perf_counter()
         path = Path(file_path).resolve()
         if not path.exists() or not path.is_file():
             raise ValueError(f"文件不存在: {file_path}")
@@ -108,6 +111,7 @@ class RAGPipeline:
                 "chunk_count": 0,
                 "document_ids": [],
                 "deleted_count": total_deleted,
+                "duration_ms": round((time.perf_counter() - start) * 1000, 2),
             }
 
         # 3. 向量存储（自动调用 embedding） + 关键词索引
@@ -119,6 +123,7 @@ class RAGPipeline:
             "chunk_count": len(documents),
             "document_ids": document_ids,
             "deleted_count": total_deleted,
+            "duration_ms": round((time.perf_counter() - start) * 1000, 2),
         }
 
     # ------------------------------------------------------------------
