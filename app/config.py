@@ -95,6 +95,7 @@ class Settings(BaseSettings):
     rag_retrieval_k: int = 9  # 粗排召回数量（重排前的候选文档数，建议为 rag_top_k 的 2-3 倍）
     rag_keyword_k: int = 9  # 关键词索引召回数量
     rag_hybrid_enabled: bool = True  # 是否合并向量召回和关键词召回
+    rag_rerank_enabled: bool = True  # 是否启用语义重排（运行时可关闭）
     rag_min_rerank_score: float = 0.25  # 重排最低相关性分数
     rag_keyword_index_path: str = "./volumes/rag_keywords.db"
 
@@ -122,6 +123,7 @@ class Settings(BaseSettings):
     storage_backend: str = "sqlite"
     storage_postgres_url: str = ""
     storage_sqlite_path: str = "./volumes/langgraph.db"
+    report_db_path: str = "./volumes/reports.db"  # 诊断报告独立 SQLite
     storage_max_history: int = 100
     storage_session_ttl: int = 86400  # 24小时
     # LangSmith 配置（可观测性）

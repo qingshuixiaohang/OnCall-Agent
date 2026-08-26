@@ -41,6 +41,7 @@ from app.core.diagnosis_report_store import DiagnosisReport, report_store
 from app.core.llm_factory import llm_factory
 from app.core.mem0_manager import schedule_memory_save
 from app.core.observability import langchain_config
+from app.core.report_builder import build_report_fields
 from app.core.time_context import build_time_context
 from app.services.workflow_factory import WorkflowFactory, route_from_supervisor
 
@@ -199,14 +200,32 @@ class MultiAgentService:
                 "run_id": run_id,
             }
 
-            # === 保存诊断报告 ===
+            # === 保存诊断报告（yield 之后，不阻塞收尾）===
             try:
+                state_values = final_state.values if final_state and final_state.values else {}
+                # 从 routing 决策中提取 fallback service
+                routing = state_values.get("routing") or []
+                fallback_service = None
+                if routing:
+                    tasks = routing[-1].get("tasks") or []
+                    if tasks:
+                        fallback_service = None  # tasks 是自然语言，不直接是服务名
+                fields = build_report_fields(
+                    report_markdown=final_report,
+                    user_input=user_input or "",
+                    state_values=state_values,
+                    fallback_service=fallback_service,
+                )
                 report = DiagnosisReport(
                     session_id=session_id,
                     run_id=run_id,
                     mode="multi_agent",
-                    severity="info",
-                    summary=(user_input or "")[:200],
+                    severity=fields["severity"],
+                    service_name=fields["service_name"],
+                    summary=fields["summary"] or (user_input or "")[:200],
+                    root_cause=fields["root_cause"],
+                    recommendations=fields["recommendations"],
+                    findings=fields["findings"],
                     report_markdown=final_report,
                     status="completed",
                 )

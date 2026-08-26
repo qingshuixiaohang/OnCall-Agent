@@ -21,6 +21,7 @@ from app.agent.aiops import PlanExecuteState, executor, planner, replanner
 from app.core.checkpointer import get_checkpointer, thread_id_with_prefix
 from app.core.diagnosis_report_store import DiagnosisReport, report_store
 from app.core.mem0_manager import asearch_memory, schedule_memory_save
+from app.core.report_builder import build_report_fields
 
 # 节点名称常量
 NODE_PLANNER = "planner"
@@ -185,23 +186,6 @@ class AIOpsService:
                 )
             # === 结束 ===
 
-            # === 保存诊断报告 ===
-            try:
-                report = DiagnosisReport(
-                    session_id=session_id,
-                    run_id=run_id,
-                    mode="aiops",
-                    severity="info",
-                    summary=(user_input or "")[:200],
-                    root_cause=final_state.values.get("root_cause") if final_state and final_state.values else None,
-                    report_markdown=final_response,
-                    status="completed",
-                )
-                await report_store.save(report)
-            except Exception as e:
-                logger.warning("[会话 {}] 保存诊断报告失败（不影响主流程）: {}", session_id, e)
-            # === 结束 ===
-
             yield {
                 "type": "complete",
                 "stage": "complete",
@@ -209,6 +193,32 @@ class AIOpsService:
                 "response": final_response,
                 "run_id": run_id,
             }
+
+            # === 保存诊断报告（yield 之后，不阻塞收尾）===
+            try:
+                state_values = final_state.values if final_state and final_state.values else {}
+                fields = build_report_fields(
+                    report_markdown=final_response,
+                    user_input=user_input or "",
+                    state_values=state_values,
+                )
+                report = DiagnosisReport(
+                    session_id=session_id,
+                    run_id=run_id,
+                    mode="aiops",
+                    severity=fields["severity"],
+                    service_name=fields["service_name"],
+                    summary=fields["summary"] or (user_input or "")[:200],
+                    root_cause=fields["root_cause"],
+                    recommendations=fields["recommendations"],
+                    findings=fields["findings"],
+                    report_markdown=final_response,
+                    status="completed",
+                )
+                await report_store.save(report)
+            except Exception as e:
+                logger.warning("[会话 {}] 保存诊断报告失败（不影响主流程）: {}", session_id, e)
+            # === 结束 ===
 
             logger.info(f"[会话 {session_id}] 任务执行完成")
 

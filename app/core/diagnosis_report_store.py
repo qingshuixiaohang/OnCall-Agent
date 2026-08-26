@@ -13,6 +13,8 @@ import aiosqlite
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from app.config import config
+
 
 class DiagnosisReport(BaseModel):
     """结构化诊断报告"""
@@ -322,4 +324,4 @@ def _row_to_report(row: aiosqlite.Row) -> DiagnosisReport:
 
 
 # 全局单例（由 lifespan 初始化）
-report_store = ReportStore(db_path="reports.db")
+report_store = ReportStore(db_path=config.report_db_path)

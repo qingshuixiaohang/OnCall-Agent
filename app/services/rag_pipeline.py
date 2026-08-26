@@ -24,7 +24,7 @@ class RAGPipeline:
     """
 
     def __init__(self):
-        self.rerank_enabled: bool = True
+        self.rerank_enabled: bool = config.rag_rerank_enabled
 
     # ------------------------------------------------------------------
     # 对外接口

@@ -22,12 +22,19 @@ class RouterAgent:
     """
 
     def __init__(self):
-        """初始化路由 Agent"""
-        self.model = llm_factory.create_chat_model(
-            temperature=0.1,
-            streaming=False,
-        )
-        logger.info("Router Agent 初始化完成")
+        """初始化路由 Agent（模型情性创建，避免 import 时调 LLM 工厂）"""
+        self._model = None
+        logger.info("Router Agent 初始化完成（模型延迟创建）")
+
+    @property
+    def model(self):
+        """首次访问时才创建 LLM"""
+        if self._model is None:
+            self._model = llm_factory.create_chat_model(
+                temperature=0.1,
+                streaming=False,
+            )
+        return self._model
 
     async def route(self, user_input: str) -> dict[str, Any]:
         """根据用户输入进行路由决策

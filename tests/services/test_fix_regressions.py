@@ -7,7 +7,7 @@
 
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from app.services.rag_pipeline import RAGPipeline
 
@@ -17,7 +17,6 @@ class TestVectorSearchRegression:
 
     def test_page_content_used_not_content(self):
         """相似性搜索返回的 Document 用 .page_content 读取"""
-        pipeline = RAGPipeline()
         # 显式验证 pipeline 源码用的是 page_content（防止未来回退）
         import inspect
         src = inspect.getsource(RAGPipeline._vector_search)
@@ -41,7 +40,10 @@ class TestIndexDirectoryRegression:
     """Bug 2 回归：/api/index_directory 对 dict 正确索引，不抛 AttributeError"""
 
     def test_index_directory_returns_proper_json(self):
-        """索引成功返回结构正确的 JSON（不再是一堆 mock 误导）"""
+        """索引成功返回结构正确的 JSON（真正 await 端点并断言内容）"""
+        import asyncio
+        import json
+
         from app.api.file import index_directory
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -59,17 +61,18 @@ class TestIndexDirectoryRegression:
                     "document_ids": ["id1"],
                     "deleted_count": 0,
                 }
-                # 直接调用端点函数，验证其逻辑（JSONResponse content）
-                resp = index_directory(directory_path=str(target))
-                content = resp.body if hasattr(resp, "body") else resp
-                # 因为是 async，用 run 包装
-                import asyncio
-                from fastapi.responses import JSONResponse
+                # async 端点必须显式执行，否则协程不会运行、断言形同虚设
+                resp = asyncio.run(index_directory(directory_path=str(target)))
+                payload = json.loads(resp.body.decode("utf-8"))
+                assert payload["code"] == 200
+                assert payload["message"] == "success"
+                assert payload["data"]["success_count"] == 1
 
     def test_dict_access_pattern(self):
         """回归保护：验证 file.py 使用 result['success'] 而非 result.success"""
-        from app.api import file as file_module
         import inspect
+
+        from app.api import file as file_module
         src = inspect.getsource(file_module)
         assert "result[\"success\"]" in src
         assert "result.success" not in src
