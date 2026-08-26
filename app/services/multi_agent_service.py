@@ -28,8 +28,7 @@ from typing import Any
 from uuid import uuid4
 
 from langchain_core.prompts import ChatPromptTemplate
-from langgraph.constants import Send
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import StateGraph
 from loguru import logger
 
 from app.agent.multi_agent.knowledge_retriever import KnowledgeRetriever
@@ -42,6 +41,7 @@ from app.core.llm_factory import llm_factory
 from app.core.mem0_manager import schedule_memory_save
 from app.core.observability import langchain_config
 from app.core.time_context import build_time_context
+from app.services.workflow_factory import WorkflowFactory, route_from_supervisor
 
 
 class MultiAgentService:
@@ -69,57 +69,14 @@ class MultiAgentService:
 
         结构：START -> supervisor -> [并行 Specialist] -> aggregator -> END
         """
-        workflow = StateGraph(MultiAgentState)
-
-        workflow.add_node("supervisor", supervisor_node)
-        workflow.add_node("log_analyzer", self.log_analyzer.run)
-        workflow.add_node("monitor_expert", self.monitor_expert.run)
-        workflow.add_node("knowledge_retriever", self.knowledge_retriever.run)
-        workflow.add_node("aggregator", self._aggregate_results)
-
-        workflow.add_edge(START, "supervisor")
-
-        def route_from_supervisor(state: MultiAgentState) -> list[str | Send]:
-            """根据路由决策并行触发 Specialist"""
-            routing = state.get("routing", [])
-            if not routing:
-                return [Send("aggregator", {})]
-
-            specialists = routing[-1].get("specialists", [])
-            if not specialists:
-                return [Send("aggregator", {})]
-
-            user_input = state.get("user_input", "")
-            tasks = routing[-1].get("tasks", [])
-            return [
-                Send(
-                    specialist,
-                    {
-                        "user_input": user_input,
-                        "specialist_task": tasks[index] if index < len(tasks) else user_input,
-                        "time_context": state.get("time_context", {}),
-                    },
-                )
-                for index, specialist in enumerate(specialists)
-            ]
-
-        workflow.add_conditional_edges(
-            "supervisor",
-            route_from_supervisor,
-            {
-                "log_analyzer": "log_analyzer",
-                "monitor_expert": "monitor_expert",
-                "knowledge_retriever": "knowledge_retriever",
-                "aggregator": "aggregator",
-            }
-        )
-
-        workflow.add_edge("log_analyzer", "aggregator")
-        workflow.add_edge("monitor_expert", "aggregator")
-        workflow.add_edge("knowledge_retriever", "aggregator")
-        workflow.add_edge("aggregator", END)
-
-        return workflow
+        node_map = {
+            "supervisor": supervisor_node,
+            "log_analyzer": self.log_analyzer.run,
+            "monitor_expert": self.monitor_expert.run,
+            "knowledge_retriever": self.knowledge_retriever.run,
+            "aggregator": self._aggregate_results,
+        }
+        return WorkflowFactory.build(node_map, route_fn=route_from_supervisor)
 
     async def _get_graph(self):
         """获取编译后的主图（延迟编译，带持久化）"""
@@ -150,7 +107,7 @@ class MultiAgentService:
         session_id: str = "default",
         run_id: str | None = None,
         resume: bool = False,
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         """执行 Multi-Agent 流程（统一 checkpointer 持久化）"""
         graph = await self._get_graph()
         if resume and not run_id:
@@ -442,6 +399,31 @@ class MultiAgentService:
             ])
         lines.extend(["## 综合建议", "以上为各 Specialist 的分析结果，请根据实际情况处理。"])
         return "\n".join(lines)
+
+    def to_stream_event(self, event: dict[str, Any]) -> dict[str, Any] | None:
+        """将 Multi-Agent 事件标准化为 StreamEvent 格式。"""
+        event_type = event.get("type")
+
+        if event_type == "routing":
+            specialists = ", ".join(event.get("specialists", []))
+            reason = event.get("reason", "")
+            return {
+                "type": "content",
+                "data": f"## 路由决策\n**专家**: {specialists}\n**原因**: {reason}\n\n",
+            }
+        elif event_type == "specialist_result":
+            name = event.get("name", "")
+            result = event.get("result", {})
+            summary = result.get("summary", "") if isinstance(result, dict) else ""
+            return {
+                "type": "content",
+                "data": f"### {name} 分析完成\n{summary or '已获取分析结果'}\n\n",
+            }
+        elif event_type == "complete":
+            return {"type": "done", "data": event.get("report", "")}
+        elif event_type == "error":
+            return {"type": "error", "data": event.get("message", "Multi-Agent 诊断失败")}
+        return None
 
 
 # 全局单例

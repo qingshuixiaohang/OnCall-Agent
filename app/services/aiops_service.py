@@ -92,7 +92,7 @@ class AIOpsService:
         session_id: str = "default",
         run_id: str | None = None,
         resume: bool = False,
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         """执行 Plan-Execute-Replan 流程（统一 checkpointer 持久化）
 
         Args:
@@ -214,7 +214,7 @@ class AIOpsService:
         user_input: str | None = None,
         run_id: str | None = None,
         resume: bool = False,
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         """AIOps 诊断接口（支持自然语言自定义输入）"""
         from textwrap import dedent
 
@@ -371,6 +371,28 @@ class AIOpsService:
             "message": f"评估完成，{'继续执行剩余步骤' if plan else '准备生成最终响应'}",
             "remaining_steps": len(plan)
         }
+
+    def to_stream_event(self, event: dict[str, Any]) -> dict[str, Any] | None:
+        """将 AIOps 事件标准化为 StreamEvent 格式。"""
+        event_type = event.get("type")
+
+        if event_type == "status":
+            return {"type": "content", "data": f"⏳ {event.get('message', '')}\n"}
+        elif event_type == "plan":
+            plan = event.get("plan", [])
+            plan_text = "\n".join([f"- {p}" for p in plan]) if isinstance(plan, list) else str(plan)
+            return {"type": "content", "data": f"## 执行计划\n{plan_text}\n\n"}
+        elif event_type == "step_complete":
+            return {"type": "content", "data": f"✅ {event.get('message', '')}\n"}
+        elif event_type == "report":
+            return {"type": "content", "data": f"## 诊断报告\n\n{event.get('report', '')}\n"}
+        elif event_type == "complete":
+            diagnosis = event.get("diagnosis", {})
+            report = diagnosis.get("report", "") or event.get("response", "")
+            return {"type": "done", "data": report}
+        elif event_type == "error":
+            return {"type": "error", "data": event.get("message", "AIOps 诊断失败")}
+        return None
 
 
 # 全局单例
