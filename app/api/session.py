@@ -18,6 +18,8 @@ from loguru import logger
 
 from app.agent.multi_agent import multi_agent_service
 from app.core.checkpointer import get_checkpointer
+from app.models.request import ClearRequest
+from app.models.response import ApiResponse, SessionInfoResponse
 from app.services.aiops_service import aiops_service
 from app.services.rag_agent_service import rag_agent_service
 
@@ -283,4 +285,35 @@ async def storage_health():
         )
     except Exception as e:
         logger.error(f"健康检查失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/sessions/clear", response_model=ApiResponse)
+async def clear_session(request: ClearRequest):
+    """清空指定会话的历史（统一入口）"""
+    try:
+        success = await rag_agent_service.clear_session(request.session_id)
+        logger.info(f"清空会话: {request.session_id}, 结果: {success}")
+        return ApiResponse(
+            status="success" if success else "error",
+            message="会话已清空" if success else "清空会话失败",
+            data=None,
+        )
+    except Exception as e:
+        logger.error(f"清空会话错误: {e}")
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/sessions/{session_id}/info", response_model=SessionInfoResponse)
+async def get_session_info(session_id: str) -> SessionInfoResponse:
+    """查询指定会话的历史消息（统一入口）"""
+    try:
+        history = await rag_agent_service.get_session_history(session_id)
+        return SessionInfoResponse(
+            session_id=session_id,
+            message_count=len(history),
+            history=history,
+        )
+    except Exception as e:
+        logger.error(f"获取会话信息错误: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e

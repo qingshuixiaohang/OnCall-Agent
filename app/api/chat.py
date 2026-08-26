@@ -5,7 +5,7 @@
 
 import json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from loguru import logger
 from sse_starlette.sse import EventSourceResponse
 
@@ -173,48 +173,13 @@ async def chat_stream(request: ChatRequest):
 
 @router.post("/chat/clear", response_model=ApiResponse)
 async def clear_session(request: ClearRequest):
-    """清空会话历史
-
-    Args:
-        request: 清空请求
-
-    Returns:
-        操作结果
-    """
-    try:
-        success = await rag_agent_service.clear_session(request.session_id)
-        logger.info(f"清空会话: {request.session_id}, 结果: {success}")
-
-        return ApiResponse(
-            status="success" if success else "error",
-            message="会话已清空" if success else "清空会话失败",
-            data=None
-        )
-
-    except Exception as e:
-        logger.error(f"清空会话错误: {e}")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+    """清空会话历史（兼容旧路径，转发到 session 统一入口）"""
+    from app.api.session import clear_session as _clear
+    return await _clear(request)
 
 
 @router.get("/chat/session/{session_id}", response_model=SessionInfoResponse)
 async def get_session_info(session_id: str) -> SessionInfoResponse:
-    """查询会话历史
-
-    Args:
-        session_id: 会话 ID
-
-    Returns:
-        会话信息
-    """
-    try:
-        history = await rag_agent_service.get_session_history(session_id)
-
-        return SessionInfoResponse(
-            session_id=session_id,
-            message_count=len(history),
-            history=history
-        )
-
-    except Exception as e:
-        logger.error(f"获取会话信息错误: {e}")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+    """查询会话历史（兼容旧路径，转发到 session 统一入口）"""
+    from app.api.session import get_session_info as _info
+    return await _info(session_id)
