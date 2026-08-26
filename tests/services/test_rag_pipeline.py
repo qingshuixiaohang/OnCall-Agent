@@ -62,13 +62,13 @@ class TestRAGPipelineQuery:
         assert "Kafka 消费延迟" in result
 
     def test_query_delegates_to_real_services(self, pipeline):
-        """集成 seam：RAGPipeline.query() 通过真实服务模块检索"""
-        # similarity_search 返回 List[SearchResult]，SearchResult 有 .content 和 .metadata
-        mock_search_result = MagicMock()
-        mock_search_result.content = "故障排查手册内容"
-        mock_search_result.metadata = {"_file_name": "manual.md"}
+        """回归保护：RAGPipeline.query() 通过 page_content 读取检索结果
 
-        # search 和 rerank 返回 List[Document]
+        从前的实现用 result.content 读取，但 similarity_search 返回
+        List[Document]（字段是 page_content），导致每次真实检索都抛
+        AttributeError。此测试确保用正确的字段名。
+        """
+        # similarity_search 返回 List[Document]，正确字段是 page_content 而非 content
         mock_doc = MagicMock()
         mock_doc.page_content = "故障排查手册内容"
         mock_doc.metadata = {"_file_name": "manual.md", "rerank_score": 0.85}
@@ -80,7 +80,7 @@ class TestRAGPipelineQuery:
         ) as mock_kis, patch(
             "app.services.rag_pipeline.rerank_service"
         ) as mock_rs:
-            mock_vsm.similarity_search.return_value = [mock_search_result]
+            mock_vsm.similarity_search.return_value = [mock_doc]
             mock_kis.search.return_value = []
             mock_rs.rerank.return_value = [mock_doc]
 
@@ -89,6 +89,22 @@ class TestRAGPipelineQuery:
         assert isinstance(result, str)
         assert "故障排查手册内容" in result
         assert "manual.md" in result
+
+    def test_vector_search_reads_document_page_content(self, pipeline):
+        """回归保护：_vector_search 直接读 Document.page_content，不抛 AttributeError"""
+        # 用真实 langchain Document 而非 MagicMock，确保走真实属性访问路径
+        from langchain_core.documents import Document as LCDocument
+
+        real_doc = LCDocument(page_content="真实文档", metadata={"_file_name": "x.md"})
+
+        with patch(
+            "app.services.rag_pipeline.vector_store_manager.similarity_search",
+            return_value=[real_doc],
+        ):
+            docs = pipeline._vector_search("fault")
+
+        assert len(docs) == 1
+        assert docs[0].page_content == "真实文档"
 
 
 class TestRAGPipelineIngest:
@@ -201,9 +217,9 @@ class TestRAGPipelineIngest:
             mock_vsm.add_documents.return_value = ["id-1"]
             pipeline.ingest(str(target))
 
-            # query 阶段：模拟检索到刚入库的文档
+            # query 阶段：模拟检索到刚入库的文档（注意 similarity_search 返回 Document，用 page_content）
             mock_vsm.similarity_search.return_value = [
-                MagicMock(content="ingested content", metadata={"_file_name": "new.md"})
+                MagicMock(page_content="ingested content", metadata={"_file_name": "new.md"})
             ]
             mock_kis.search.return_value = []
             mock_rs.rerank.return_value = [

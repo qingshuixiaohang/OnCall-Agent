@@ -167,8 +167,8 @@ async def index_directory(directory_path: str = None):
             status_code=200,
             content={
                 "code": 200,
-                "message": "success" if result.success else "partial_success",
-                "data": result.to_dict(),
+                "message": "success" if result["success"] else "partial_success",
+                "data": result,
             },
         )
 

@@ -135,7 +135,7 @@ class RAGPipeline:
             expr=expr,
         )
         return [
-            Document(page_content=r.content, metadata=r.metadata or {})
+            Document(page_content=r.page_content, metadata=r.metadata or {})
             for r in results
         ]
 
