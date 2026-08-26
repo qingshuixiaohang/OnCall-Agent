@@ -17,7 +17,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.prebuilt import ToolNode
 from loguru import logger
 
-from app.agent.mcp_client import get_mcp_client_with_retry
+from app.agent.mcp_client import get_mcp_tools
 from app.core.llm_factory import llm_factory
 from app.tools import get_current_time, retrieve_knowledge
 
@@ -132,8 +132,7 @@ async def executor(state: PlanExecuteState) -> dict[str, Any]:
     try:
         local_tools = [get_current_time, retrieve_knowledge]
 
-        mcp_client = await get_mcp_client_with_retry()
-        mcp_tools = await mcp_client.get_tools()
+        mcp_tools = await get_mcp_tools()
         logger.info(f"可用工具数量: 本地 {len(local_tools)} + MCP {len(mcp_tools)}")
 
         all_tools = local_tools + mcp_tools

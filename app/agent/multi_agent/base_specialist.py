@@ -165,12 +165,3 @@ class BaseSpecialist(ABC):
             final_response.content if hasattr(final_response, "content") else str(final_response),
             tool_traces,
         )
-
-    async def get_tools_by_names(
-        self,
-        all_tools: list[BaseTool],
-        names: list[str],
-    ) -> list[BaseTool]:
-        """从全部工具中筛选出本 Specialist 需要的工具子集"""
-        tool_map = {tool.name: tool for tool in all_tools}
-        return [tool_map[name] for name in names if name in tool_map]

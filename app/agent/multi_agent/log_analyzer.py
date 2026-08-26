@@ -16,7 +16,7 @@ from typing import Any
 
 from loguru import logger
 
-from app.agent.mcp_client import get_mcp_client_with_retry
+from app.agent.mcp_client import get_mcp_tools
 from app.agent.multi_agent.base_specialist import BaseSpecialist
 from app.agent.multi_agent.state import MultiAgentState
 
@@ -58,7 +58,6 @@ ANALYZER_SYSTEM_PROMPT = """\
 - 分析不超过 300 字
 """
 
-
 class LogAnalyzer(BaseSpecialist):
     """日志分析 Specialist"""
 
@@ -78,11 +77,10 @@ class LogAnalyzer(BaseSpecialist):
 
     async def _execute(self, state: MultiAgentState) -> dict[str, Any]:
         user_input = state.get("user_input", "")
-        mcp_client = await get_mcp_client_with_retry()
-        all_mcp_tools = await mcp_client.get_tools()
+        mcp_tools = await get_mcp_tools(LOG_TOOLS_NAMES)
 
         # 筛选出日志相关工具子集
-        tools = await self.get_tools_by_names(all_mcp_tools, LOG_TOOLS_NAMES)
+        tools = mcp_tools
         if not tools:
             logger.warning(f"[{self.name}] 没有 MCP 工具可用，返回降级结果")
             return {

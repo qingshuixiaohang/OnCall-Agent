@@ -185,3 +185,32 @@ def _create_mcp_client(
 
     # 第一个参数是 servers 配置，直接传递
     return MultiServerMCPClient(timeouted, **kwargs)  # type: ignore[arg-type]
+
+
+# 工具列表缓存
+_mcp_tools_cache: list | None = None
+
+
+async def get_mcp_tools(filter_names: list[str] | None = None) -> list:
+    """获取 MCP 工具列表（带缓存，按名称过滤可选）。
+
+    Args:
+        filter_names: 可选，只返回指定名称的工具
+
+    Returns:
+        list[BaseTool]: 工具列表
+    """
+    global _mcp_tools_cache
+    if _mcp_tools_cache is None:
+        client = await get_mcp_client_with_retry()
+        _mcp_tools_cache = await client.get_tools()
+    if filter_names:
+        tool_map = {t.name: t for t in _mcp_tools_cache}
+        return [tool_map[n] for n in filter_names if n in tool_map]
+    return _mcp_tools_cache
+
+
+async def clear_mcp_tools_cache():
+    """清空工具列表缓存（工具列表变更时调用）"""
+    global _mcp_tools_cache
+    _mcp_tools_cache = None

@@ -28,7 +28,7 @@ from langchain_core.messages import (
 from loguru import logger
 from typing_extensions import TypedDict
 
-from app.agent.mcp_client import get_mcp_client_with_retry
+from app.agent.mcp_client import get_mcp_tools
 from app.config import config
 from app.core.checkpointer import get_checkpointer, thread_id_with_prefix
 from app.core.conversation_compressor import (
@@ -82,9 +82,8 @@ class RagAgentService:
         if self._agent_initialized:
             return
 
-        mcp_client = await get_mcp_client_with_retry()
         try:
-            mcp_tools = await mcp_client.get_tools()
+            mcp_tools = await get_mcp_tools()
             logger.info(f"成功加载 {len(mcp_tools)} 个 MCP 工具")
         except Exception as e:
             logger.warning(f"MCP 工具加载失败: {e}")
