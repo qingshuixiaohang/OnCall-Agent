@@ -51,7 +51,8 @@ def get_memory() -> Any:
     """获取 Mem0 全局单例
 
     初始化配置说明：
-    - llm: 用 DashScope（阿里云百炼兼容模式）
+    - llm: 用 DashScope（阿里云百炼兼容模式），模型由 config.mem0_model 指定
+      （独立于主对话模型 rag_model，避免抢占额度）
     - embedder: 用 SiliconFlow（BGE-M3，与 Milvus 向量维度 1024 一致）
     - vector_store: 用 Qdrant 本地模式（Mem0 v2.0.14 不支持 sqlite）
 
@@ -77,7 +78,7 @@ def get_memory() -> Any:
             "llm": {
                 "provider": "openai",
                 "config": {
-                    "model": config.dashscope_model,
+                    "model": config.mem0_model,
                     "openai_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
                     "api_key": config.dashscope_api_key,
                 },

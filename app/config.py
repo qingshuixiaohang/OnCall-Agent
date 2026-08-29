@@ -88,6 +88,11 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("RAG_MODEL", "DASHSCOPE_MODEL"),
         description="所有 DashScope 对话调用共用的模型名称",
     )
+    mem0_model: str = Field(
+        default="qwen3.7-plus-2026-05-26",
+        validation_alias=AliasChoices("MEM0_MODEL"),
+        description="Mem0 记忆抽取用的模型（独立于主对话模型，避免抢占额度）",
+    )
 
     # 重排模型配置
     rerank_backend: str = "siliconflow"  # 重排后端：siliconflow（免费）或 dashscope（阿里云百炼）
